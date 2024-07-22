@@ -9,7 +9,9 @@
 #ifndef _SND_SOC_INTEL_QUIRKS_H
 #define _SND_SOC_INTEL_QUIRKS_H
 
-#if IS_ENABLED(CONFIG_X86)
+#include <linux/platform_data/x86/soc.h>
+
+#if IS_REACHABLE(CONFIG_IOSF_MBI)
 
 #include <linux/dmi.h>
 #include <asm/cpu_device_id.h>
