@@ -117,9 +117,6 @@
 #endif
 #include <net/l3mdev.h>
 #include <net/compat.h>
-#ifdef CONFIG_NET_ANALYTICS
-#include <net/analytics.h>
-#endif
 
 #include <trace/events/sock.h>
 
@@ -817,23 +814,12 @@ EXPORT_SYMBOL_GPL(inet_send_prepare);
 int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
-#ifdef CONFIG_NET_ANALYTICS
-	int err;
-#endif
 
 	if (unlikely(inet_send_prepare(sk)))
 		return -EAGAIN;
 
-#ifdef CONFIG_NET_ANALYTICS
-	err = INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg,
-			       sk, msg, size);
-	net_usr_tx(sk, err);
-
-	return err;
-#else
 	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg,
 			       sk, msg, size);
-#endif
 }
 EXPORT_SYMBOL(inet_sendmsg);
 
@@ -868,11 +854,6 @@ int inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 			      flags & ~MSG_DONTWAIT, &addr_len);
 	if (err >= 0)
 		msg->msg_namelen = addr_len;
-
-#ifdef CONFIG_NET_ANALYTICS
-	net_usr_rx(sk, err);
-#endif
-
 	return err;
 }
 EXPORT_SYMBOL(inet_recvmsg);

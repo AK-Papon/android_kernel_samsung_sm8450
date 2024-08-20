@@ -976,7 +976,7 @@ int device_links_check_suppliers(struct device *dev)
 	mutex_lock(&fwnode_link_lock);
 	if (dev->fwnode && !list_empty(&dev->fwnode->suppliers) &&
 	    !fw_devlink_is_permissive()) {
-		dev_info(dev, "probe deferral - wait for supplier %pfwP\n",
+		dev_dbg(dev, "probe deferral - wait for supplier %pfwP\n",
 			list_first_entry(&dev->fwnode->suppliers,
 			struct fwnode_link,
 			c_hook)->supplier);
@@ -994,7 +994,7 @@ int device_links_check_suppliers(struct device *dev)
 		if (link->status != DL_STATE_AVAILABLE &&
 		    !(link->flags & DL_FLAG_SYNC_STATE_ONLY)) {
 			device_links_missing_supplier(dev);
-			dev_info(dev, "probe deferral - supplier %s not ready\n",
+			dev_dbg(dev, "probe deferral - supplier %s not ready\n",
 				dev_name(link->supplier));
 			ret = -EPROBE_DEFER;
 			break;
@@ -3132,8 +3132,6 @@ int device_add(struct device *dev)
 	int error = -EINVAL;
 	struct kobject *glue_dir = NULL;
 
-	int ret = 0;
-
 	dev = get_device(dev);
 	if (!dev)
 		goto done;
@@ -3228,9 +3226,7 @@ int device_add(struct device *dev)
 		blocking_notifier_call_chain(&dev->bus->p->bus_notifier,
 					     BUS_NOTIFY_ADD_DEVICE, dev);
 
-	ret = kobject_uevent(&dev->kobj, KOBJ_ADD);
-	if (!strncmp(dev_name(dev), "remoteproc", strlen("remoteproc")))
-		pr_err("[%s] dev : %s add ret : %d\n", __func__, dev_name(dev), ret);
+	kobject_uevent(&dev->kobj, KOBJ_ADD);
 
 	/*
 	 * Check if any of the other devices (consumers) have been waiting for

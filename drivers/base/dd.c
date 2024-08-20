@@ -89,7 +89,6 @@ static void deferred_probe_work_func(struct work_struct *work)
 	 * from under our feet.
 	 */
 	mutex_lock(&deferred_probe_mutex);
-	pr_info("%s start \n", __func__);
 	while (!list_empty(&deferred_probe_active_list)) {
 		private = list_first_entry(&deferred_probe_active_list,
 					typeof(*dev->p), deferred_probe);
@@ -115,13 +114,12 @@ static void deferred_probe_work_func(struct work_struct *work)
 		 */
 		device_pm_move_to_tail(dev);
 
-		dev_info(dev, "Retrying from deferred list\n");
+		dev_dbg(dev, "Retrying from deferred list\n");
 		bus_probe_device(dev);
 		mutex_lock(&deferred_probe_mutex);
 
 		put_device(dev);
 	}
-	pr_info("%s end \n", __func__);
 	mutex_unlock(&deferred_probe_mutex);
 }
 static DECLARE_WORK(deferred_probe_work, deferred_probe_work_func);
@@ -130,7 +128,7 @@ void driver_deferred_probe_add(struct device *dev)
 {
 	mutex_lock(&deferred_probe_mutex);
 	if (list_empty(&dev->p->deferred_probe)) {
-		dev_info(dev, "Added to deferred list\n");
+		dev_dbg(dev, "Added to deferred list\n");
 		list_add_tail(&dev->p->deferred_probe, &deferred_probe_pending_list);
 	}
 	mutex_unlock(&deferred_probe_mutex);
@@ -140,7 +138,7 @@ void driver_deferred_probe_del(struct device *dev)
 {
 	mutex_lock(&deferred_probe_mutex);
 	if (!list_empty(&dev->p->deferred_probe)) {
-		dev_info(dev, "Removed from deferred list\n");
+		dev_dbg(dev, "Removed from deferred list\n");
 		list_del_init(&dev->p->deferred_probe);
 		kfree(dev->p->deferred_probe_reason);
 		dev->p->deferred_probe_reason = NULL;
@@ -556,9 +554,6 @@ re_probe:
 			goto probe_failed;
 	}
 
-	pr_info("bus: '%s': %s: probing driver %s with device %s\n",
-		 drv->bus->name, __func__, drv->name, dev_name(dev));
-
 	if (dev->bus->probe) {
 		ret = dev->bus->probe(dev);
 		if (ret)
@@ -647,12 +642,12 @@ pinctrl_bind_failed:
 	switch (ret) {
 	case -EPROBE_DEFER:
 		/* Driver requested deferred probing */
-		dev_info(dev, "Driver %s requests probe deferral\n", drv->name);
+		dev_dbg(dev, "Driver %s requests probe deferral\n", drv->name);
 		driver_deferred_probe_add_trigger(dev, local_trigger_count);
 		break;
 	case -ENODEV:
 	case -ENXIO:
-		pr_info("%s: probe of %s rejects match %d\n",
+		pr_debug("%s: probe of %s rejects match %d\n",
 			 drv->name, dev_name(dev), ret);
 		break;
 	default:
@@ -1192,8 +1187,6 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 		else if (drv->remove)
 			drv->remove(dev);
 
-		device_links_driver_cleanup(dev);
-
 		devres_release_all(dev);
 		arch_teardown_dma_ops(dev);
 		kfree(dev->dma_range_map);
@@ -1204,6 +1197,8 @@ static void __device_release_driver(struct device *dev, struct device *parent)
 			dev->pm_domain->dismiss(dev);
 		pm_runtime_reinit(dev);
 		dev_pm_set_driver_flags(dev, 0);
+
+		device_links_driver_cleanup(dev);
 
 		klist_remove(&dev->p->knode_driver);
 		device_pm_check_callbacks(dev);

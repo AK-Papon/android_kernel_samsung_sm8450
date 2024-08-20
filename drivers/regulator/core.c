@@ -5483,15 +5483,11 @@ wash:
 	mutex_lock(&regulator_list_mutex);
 	regulator_ena_gpio_free(rdev);
 	mutex_unlock(&regulator_list_mutex);
-	put_device(&rdev->dev);
-	rdev = NULL;
 clean:
 	if (dangling_of_gpiod)
 		gpiod_put(config->ena_gpiod);
-	if (rdev && rdev->dev.of_node)
-		of_node_put(rdev->dev.of_node);
-	kfree(rdev);
 	kfree(config);
+	put_device(&rdev->dev);
 rinse:
 	if (dangling_cfg_gpiod)
 		gpiod_put(cfg->ena_gpiod);
@@ -5530,87 +5526,6 @@ void regulator_unregister(struct regulator_dev *rdev)
 	mutex_unlock(&regulator_list_mutex);
 }
 EXPORT_SYMBOL_GPL(regulator_unregister);
-
-struct rdev_check_data {
-	struct regulator_dev *parent;
-	int level;
-};
-
-static void regulator_show_enabled_subtree(struct regulator_dev *rdev,
-					int level);
-
-static int regulator_show_enabled_children(struct device *dev, void *data)
-{
-	struct regulator_dev *rdev = dev_to_rdev(dev);
-	struct rdev_check_data *check_data = data;
-
-	if (rdev->supply && rdev->supply->rdev == check_data->parent)
-		regulator_show_enabled_subtree(rdev, check_data->level + 1);
-
-	return 0;
-}
-
-static void regulator_show_enabled_subtree(struct regulator_dev *rdev,
-					int level)
-{
-	struct regulation_constraints *c;
-	struct rdev_check_data check_data;
-
-	if (!rdev)
-		return;
-
-	if (rdev->use_count <= 0)
-		goto out;
-
-	if (rdev->constraints->always_on &&
-			rdev->constraints->initial_mode == 1)
-		goto out;
-
-	pr_cont("%*s%-*s %3d %4d %9d",
-		   level * 3 + 1, "",
-		   30 - level * 3, rdev_get_name(rdev),
-		   rdev->use_count, rdev->constraints->initial_mode,
-		   rdev->constraints->always_on);
-
-	c = rdev->constraints;
-	if (c) {
-		switch (rdev->desc->type) {
-		case REGULATOR_VOLTAGE:
-			pr_cont("%5dmV %5dmV\n",
-				   c->min_uV / 1000, c->max_uV / 1000);
-			break;
-		case REGULATOR_CURRENT:
-			pr_cont("%5dmA %5dmA\n",
-				   c->min_uA / 1000, c->max_uA / 1000);
-			break;
-		}
-	}
-out:
-	check_data.level = level;
-	check_data.parent = rdev;
-
-	class_for_each_device(&regulator_class, NULL, &check_data,
-			      regulator_show_enabled_children);
-}
-
-static int _regulator_show_enabled(struct device *dev, void *data)
-{
-	struct regulator_dev *rdev = dev_to_rdev(dev);
-
-	if (!rdev->supply)
-		regulator_show_enabled_subtree(rdev, 0);
-
-	return 0;
-}
-
-int regulator_show_enabled(void)
-{
-	pr_info(" regulator                      use mode always-on     min     max\n");
-	pr_info("------------------------------------------------------------------\n");
-
-	return class_for_each_device(&regulator_class, NULL, NULL,
-				     _regulator_show_enabled);
-}
 
 #ifdef CONFIG_SUSPEND
 /**
@@ -6124,7 +6039,7 @@ static int __init regulator_init_complete(void)
 	 * command line option might be useful.
 	 */
 	schedule_delayed_work(&regulator_init_complete_work,
-			      msecs_to_jiffies(90000));
+			      msecs_to_jiffies(30000));
 
 	return 0;
 }

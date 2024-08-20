@@ -91,8 +91,6 @@ bool cgroup_memory_noswap __read_mostly;
 #define cgroup_memory_noswap		1
 #endif
 
-int is_heimdall_enabled;
-
 #ifdef CONFIG_CGROUP_WRITEBACK
 static DECLARE_WAIT_QUEUE_HEAD(memcg_cgwb_frn_waitq);
 #endif
@@ -2930,7 +2928,8 @@ static void commit_charge(struct page *page, struct mem_cgroup *memcg)
  * Moreover, it should not come from DMA buffer and is not readily
  * reclaimable. So those GFP bits should be masked off.
  */
-#define OBJCGS_CLEAR_MASK	(__GFP_DMA | __GFP_RECLAIMABLE | __GFP_ACCOUNT)
+#define OBJCGS_CLEAR_MASK	(__GFP_DMA | __GFP_RECLAIMABLE | \
+				 __GFP_ACCOUNT | __GFP_NOFAIL)
 
 int memcg_alloc_page_obj_cgroups(struct page *page, struct kmem_cache *s,
 				 gfp_t gfp)
@@ -3615,16 +3614,10 @@ static unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap)
 		if (swap)
 			val += memcg_page_state(memcg, MEMCG_SWAP);
 	} else {
-		if (is_heimdall_enabled) {
-			val = memcg_page_state(memcg, NR_ANON_MAPPED);
-			if (swap)
-				val += memcg_page_state(memcg, MEMCG_SWAP);
-		} else {
-			if (!swap)
-				val = page_counter_read(&memcg->memory);
-			else
-				val = page_counter_read(&memcg->memsw);
-		}
+		if (!swap)
+			val = page_counter_read(&memcg->memory);
+		else
+			val = page_counter_read(&memcg->memsw);
 	}
 	return val;
 }

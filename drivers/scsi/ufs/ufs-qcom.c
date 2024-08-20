@@ -284,13 +284,6 @@ static int ufs_qcom_host_reset(struct ufs_hba *hba)
 				 __func__, ret);
 
 	usleep_range(1000, 1100);
-	/*
-	 * The ice registers are also reset to default values after a ufs
-	 * host controller reset. Reset the ice internal software flags here
-	 * so that the ice hardware will be re-initialized properly in the
-	 * later part of the UFS host controller reset.
-	 */
-	ufs_qcom_ice_disable(host);
 
 	if (reenable_intr) {
 		enable_irq(hba->irq);
@@ -1493,9 +1486,8 @@ static void ufs_qcom_config_scaling_param(struct ufs_hba *hba,
 
 	d = (struct devfreq_simple_ondemand_data *)data;
 	p->polling_ms = 60;
-	p->timer = DEVFREQ_TIMER_DELAYED;
 	d->upthreshold = 70;
-	d->downdifferential = 65;
+	d->downdifferential = 5;
 }
 #else
 static void ufs_qcom_config_scaling_param(struct ufs_hba *hba,

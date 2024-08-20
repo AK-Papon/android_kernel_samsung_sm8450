@@ -198,7 +198,6 @@ int xhci_reset(struct xhci_hcd *xhci, u64 timeout_us)
 	if (xhci->quirks & XHCI_INTEL_HOST)
 		udelay(1000);
 
-	timeout_us = 1000 * 1000;
 	ret = xhci_handshake(&xhci->op_regs->command, CMD_RESET, 0, timeout_us);
 	if (ret)
 		return ret;
@@ -1142,7 +1141,7 @@ int xhci_resume(struct xhci_hcd *xhci, bool hibernated)
 		 * for controller not ready bit to clear, just as in xHC init.
 		 */
 		retval = xhci_handshake(&xhci->op_regs->status,
-					STS_CNR, 0, 1000 * 1000);
+					STS_CNR, 0, 10 * 1000 * 1000);
 		if (retval) {
 			xhci_warn(xhci, "Controller not ready at resume %d\n",
 				  retval);

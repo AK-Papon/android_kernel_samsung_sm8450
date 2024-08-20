@@ -76,7 +76,6 @@
 #include <trace/hooks/ipv4.h>
 #include <trace/hooks/pci.h>
 #include <trace/hooks/dmabuf.h>
-#include <trace/hooks/mz.h>
 #include <trace/hooks/wakeupbypass.h>
 
 /*
@@ -475,7 +474,6 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_del_from_avail_list);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh___cgroup_throttle_swaprate);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_madvise_cold_or_pageout);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_page_isolated_for_reclaim);
-EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_should_end_madvise);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_inactive_is_low);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_snapshot_refaults);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_account_swap_pages);
@@ -512,4 +510,3 @@ EXPORT_SYMBOL_GPL(GKI_struct_gic_chip_data);
 #include <linux/swap_slots.h>
 const struct swap_slots_cache *GKI_struct_swap_slots_cache;
 EXPORT_SYMBOL_GPL(GKI_struct_swap_slots_cache);
-EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_mz_exit);
