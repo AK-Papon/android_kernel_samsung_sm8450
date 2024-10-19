@@ -504,6 +504,9 @@ static const struct usb_device_id usb_quirk_list[] = {
 	{ USB_DEVICE(0x1b1c, 0x1b38), .driver_info = USB_QUIRK_DELAY_INIT |
 	  USB_QUIRK_DELAY_CTRL_MSG },
 
+	/* START BP-850k Printer */
+	{ USB_DEVICE(0x1bc3, 0x0003), .driver_info = USB_QUIRK_NO_SET_INTF },
+
 	/* MIDI keyboard WORLDE MINI */
 	{ USB_DEVICE(0x1c75, 0x0204), .driver_info =
 			USB_QUIRK_CONFIG_INTF_STRINGS },
@@ -734,31 +737,3 @@ void usb_release_quirk_list(void)
 	quirk_list = NULL;
 	mutex_unlock(&quirk_mutex);
 }
-
-#ifdef CONFIG_USB_INTERFACE_LPM_LIST
-static const struct usb_device_id usb_interface_list_lpm[] = {
-	{ .match_flags = USB_DEVICE_ID_MATCH_INT_CLASS,
-		.bInterfaceClass = USB_CLASS_AUDIO},
-	{ }						/* Terminating entry */
-};
-
-int usb_detect_interface_lpm(struct usb_device *udev)
-{
-	const struct usb_device_id *id = usb_interface_list_lpm;
-	int l1_enable = 0;
-
-	for (; id->match_flags; id++) {
-		if (!usb_match_device(udev, id))
-			continue;
-
-		if ((id->match_flags & USB_DEVICE_ID_MATCH_INT_INFO) &&
-		    !usb_match_any_interface(udev, id))
-			continue;
-
-		l1_enable = 1;
-	}
-
-	pr_info("%s:Device will %s L1\n", __func__, l1_enable?"enable":"disable");
-	return l1_enable;
-}
-#endif

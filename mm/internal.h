@@ -40,20 +40,6 @@ vm_fault_t do_swap_page(struct vm_fault *vmf);
 extern struct vm_area_struct *get_vma(struct mm_struct *mm,
 				      unsigned long addr);
 extern void put_vma(struct vm_area_struct *vma);
-
-static inline bool vma_has_changed(struct vm_fault *vmf)
-{
-	int ret = RB_EMPTY_NODE(&vmf->vma->vm_rb);
-	unsigned int seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
-
-	/*
-	 * Matches both the wmb in write_seqlock_{begin,end}() and
-	 * the wmb in vma_rb_erase().
-	 */
-	smp_rmb();
-
-	return ret || seq != vmf->sequence;
-}
 #endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
 
 void free_pgtables(struct mmu_gather *tlb, struct vm_area_struct *start_vma,
@@ -663,16 +649,4 @@ struct migration_target_control {
 	gfp_t gfp_mask;
 };
 
-#ifdef CONFIG_HUGEPAGE_POOL
-#include <linux/hugepage_pool.h>
-static inline struct page *alloc_from_hugepage_pool(gfp_t gfp_mask,
-		struct vm_area_struct *vma, unsigned long addr, int order) {
-	return alloc_zeroed_hugepage(gfp_mask, order, false, HPAGE_ANON);
-}
-extern void ___free_pages_ok(struct page *page, unsigned int order,
-		      int __bitwise fpi_flags, bool skip_hugepage_pool);
-extern void prep_new_page(struct page *page, unsigned int order, gfp_t gfp_flags,
-						unsigned int alloc_flags);
-void compact_node_async(void);
-#endif
 #endif	/* __MM_INTERNAL_H */

@@ -197,20 +197,15 @@ void log_threaded_irq_wakeup_reason(int irq, int parent_irq)
 		return;
 	}
 
-	if (parent_irq == -1) {
+	parent = find_node_in_list(&parent_irqs, parent_irq);
+	if (parent != NULL)
 		add_sibling_node_sorted(&leaf_irqs, irq);
-		wakeup_reason = RESUME_IRQ;
-	} else {
-		parent = find_node_in_list(&parent_irqs, parent_irq);
-		if (parent != NULL)
+	else {
+		parent = find_node_in_list(&leaf_irqs, parent_irq);
+		if (parent != NULL) {
+			list_del_init(&parent->siblings);
+			list_add_tail(&parent->siblings, &parent_irqs);
 			add_sibling_node_sorted(&leaf_irqs, irq);
-		else {
-			parent = find_node_in_list(&leaf_irqs, parent_irq);
-			if (parent != NULL) {
-				list_del_init(&parent->siblings);
-				list_add_tail(&parent->siblings, &parent_irqs);
-				add_sibling_node_sorted(&leaf_irqs, irq);
-			}
 		}
 	}
 

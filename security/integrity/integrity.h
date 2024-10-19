@@ -18,17 +18,6 @@
 #include <linux/key.h>
 #include <linux/audit.h>
 
-struct integrity_label;
-
-enum five_file_integrity {
-	FIVE_FILE_UNKNOWN,
-	FIVE_FILE_FAIL,
-	FIVE_FILE_RSA,
-	FIVE_FILE_DMVERITY,
-	FIVE_FILE_FSVERITY,
-	FIVE_FILE_HMAC
-};
-
 /* iint action cache flags */
 #define IMA_MEASURE		0x00000001
 #define IMA_MEASURED		0x00000002
@@ -68,10 +57,6 @@ enum five_file_integrity {
 #define IMA_READ_APPRAISED	0x00080000
 #define IMA_CREDS_APPRAISE	0x00100000
 #define IMA_CREDS_APPRAISED	0x00200000
-
-#define FIVE_DMVERITY_PROTECTED	0x00040000
-#define FIVE_TRUSTED_FILE	0x00080000
-
 #define IMA_APPRAISE_SUBMASK	(IMA_FILE_APPRAISE | IMA_MMAP_APPRAISE | \
 				 IMA_BPRM_APPRAISE | IMA_READ_APPRAISE | \
 				 IMA_CREDS_APPRAISE)
@@ -146,6 +131,8 @@ struct integrity_iint_cache {
 	unsigned long flags;
 	unsigned long measured_pcrs;
 	unsigned long atomic_flags;
+	unsigned long real_ino;
+	dev_t real_dev;
 	enum integrity_status ima_file_status:4;
 	enum integrity_status ima_mmap_status:4;
 	enum integrity_status ima_bprm_status:4;
@@ -153,12 +140,6 @@ struct integrity_iint_cache {
 	enum integrity_status ima_creds_status:4;
 	enum integrity_status evm_status:4;
 	struct ima_digest_data *ima_hash;
-#ifdef CONFIG_FIVE
-	unsigned long five_flags;
-	enum five_file_integrity five_status;
-	struct integrity_label *five_label;
-	bool five_signing;
-#endif
 };
 
 /* rbtree tree calls to lookup, insert, delete
