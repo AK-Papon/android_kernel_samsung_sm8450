@@ -2723,10 +2723,7 @@ static int hclge_mac_init(struct hclge_dev *hdev)
 	int ret;
 
 	hdev->support_sfp_query = true;
-
-	if (!test_bit(HCLGE_STATE_RST_HANDLING, &hdev->state))
-		hdev->hw.mac.duplex = HCLGE_MAC_FULL;
-
+	hdev->hw.mac.duplex = HCLGE_MAC_FULL;
 	ret = hclge_cfg_mac_speed_dup_hw(hdev, hdev->hw.mac.speed,
 					 hdev->hw.mac.duplex);
 	if (ret)
@@ -7005,7 +7002,8 @@ static void hclge_set_timer_task(struct hnae3_handle *handle, bool enable)
 		/* Set the DOWN flag here to disable link updating */
 		set_bit(HCLGE_STATE_DOWN, &hdev->state);
 
-		smp_mb__after_atomic(); /* flush memory to make sure DOWN is seen by service task */
+		/* flush memory to make sure DOWN is seen by service task */
+		smp_mb__before_atomic();
 		hclge_flush_link_update(hdev);
 	}
 }
@@ -10051,8 +10049,8 @@ static void hclge_flr_done(struct hnae3_ae_dev *ae_dev)
 		dev_err(&hdev->pdev->dev, "fail to rebuild, ret=%d\n", ret);
 
 	hdev->reset_type = HNAE3_NONE_RESET;
-	if (test_and_clear_bit(HCLGE_STATE_RST_HANDLING, &hdev->state))
-		up(&hdev->reset_sem);
+	clear_bit(HCLGE_STATE_RST_HANDLING, &hdev->state);
+	up(&hdev->reset_sem);
 }
 
 static void hclge_clear_resetting_state(struct hclge_dev *hdev)

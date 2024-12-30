@@ -46,10 +46,8 @@ enum {
 	REG_UFS_TX_SYMBOL_CLK_NS_US         = 0xC4,
 	REG_UFS_LOCAL_PORT_ID_REG           = 0xC8,
 	REG_UFS_PA_ERR_CODE                 = 0xCC,
-	/* On older UFS revisions, this register is called "RETRY_TIMER_REG" */
-	REG_UFS_PARAM0                      = 0xD0,
-	/* On older UFS revisions, this register is called "REG_UFS_PA_LINK_STARTUP_TIMER" */
-	REG_UFS_CFG0                        = 0xD8,
+	REG_UFS_RETRY_TIMER_REG             = 0xD0,
+	REG_UFS_PA_LINK_STARTUP_TIMER       = 0xD8,
 	REG_UFS_CFG1                        = 0xDC,
 	REG_UFS_CFG2                        = 0xE0,
 	REG_UFS_HW_VERSION                  = 0xE4,
@@ -86,9 +84,6 @@ enum {
 
 #define UFS_CNTLR_2_x_x_VEN_REGS_OFFSET(x)	(0x000 + x)
 #define UFS_CNTLR_3_x_x_VEN_REGS_OFFSET(x)	(0x400 + x)
-
-/* bit definitions for REG_UFS_CFG0 register */
-#define QUNIPRO_G4_SEL		BIT(5)
 
 /* bit definitions for REG_UFS_CFG1 register */
 #define QUNIPRO_SEL		0x1
@@ -161,10 +156,10 @@ static inline void ufs_qcom_assert_reset(struct ufs_hba *hba)
 			1 << OFFSET_UFS_PHY_SOFT_RESET, REG_UFS_CFG1);
 
 	/*
-	 * Dummy read to ensure the write takes effect before doing any sort
-	 * of delay
+	 * Make sure assertion of ufs phy reset is written to
+	 * register before returning
 	 */
-	ufshcd_readl(hba, REG_UFS_CFG1);
+	mb();
 }
 
 static inline void ufs_qcom_deassert_reset(struct ufs_hba *hba)
@@ -173,10 +168,10 @@ static inline void ufs_qcom_deassert_reset(struct ufs_hba *hba)
 			0 << OFFSET_UFS_PHY_SOFT_RESET, REG_UFS_CFG1);
 
 	/*
-	 * Dummy read to ensure the write takes effect before doing any sort
-	 * of delay
+	 * Make sure de-assertion of ufs phy reset is written to
+	 * register before returning
 	 */
-	ufshcd_readl(hba, REG_UFS_CFG1);
+	mb();
 }
 
 /* Host controller hardware version: major.minor.step */

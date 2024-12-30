@@ -142,12 +142,12 @@ static void fuse_evict_inode(struct inode *inode)
 	}
 }
 
-static int fuse_reconfigure(struct fs_context *fsc)
+static int fuse_reconfigure(struct fs_context *fc)
 {
-	struct super_block *sb = fsc->root->d_sb;
+	struct super_block *sb = fc->root->d_sb;
 
 	sync_filesystem(sb);
-	if (fsc->sb_flags & SB_MANDLOCK)
+	if (fc->sb_flags & SB_MANDLOCK)
 		return -EINVAL;
 
 	return 0;
@@ -353,11 +353,8 @@ retry:
 	} else if (fuse_stale_inode(inode, generation, attr)) {
 		/* nodeid was reused, any I/O on the old inode should fail */
 		fuse_make_bad(inode);
-		if (inode != d_inode(sb->s_root)) {
-			remove_inode_hash(inode);
-			iput(inode);
-			goto retry;
-		}
+		iput(inode);
+		goto retry;
 	}
 done:
 	fi = get_fuse_inode(inode);
@@ -536,40 +533,38 @@ static const struct fs_parameter_spec fuse_fs_parameters[] = {
 	{}
 };
 
-static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
+static int fuse_parse_param(struct fs_context *fc, struct fs_parameter *param)
 {
 	struct fs_parse_result result;
-	struct fuse_fs_context *ctx = fsc->fs_private;
+	struct fuse_fs_context *ctx = fc->fs_private;
 	int opt;
-	kuid_t kuid;
-	kgid_t kgid;
 
-	if (fsc->purpose == FS_CONTEXT_FOR_RECONFIGURE) {
+	if (fc->purpose == FS_CONTEXT_FOR_RECONFIGURE) {
 		/*
 		 * Ignore options coming from mount(MS_REMOUNT) for backward
 		 * compatibility.
 		 */
-		if (fsc->oldapi)
+		if (fc->oldapi)
 			return 0;
 
-		return invalfc(fsc, "No changes allowed in reconfigure");
+		return invalfc(fc, "No changes allowed in reconfigure");
 	}
 
-	opt = fs_parse(fsc, fuse_fs_parameters, param, &result);
+	opt = fs_parse(fc, fuse_fs_parameters, param, &result);
 	if (opt < 0)
 		return opt;
 
 	switch (opt) {
 	case OPT_SOURCE:
-		if (fsc->source)
-			return invalfc(fsc, "Multiple sources specified");
-		fsc->source = param->string;
+		if (fc->source)
+			return invalfc(fc, "Multiple sources specified");
+		fc->source = param->string;
 		param->string = NULL;
 		break;
 
 	case OPT_SUBTYPE:
 		if (ctx->subtype)
-			return invalfc(fsc, "Multiple subtypes specified");
+			return invalfc(fc, "Multiple subtypes specified");
 		ctx->subtype = param->string;
 		param->string = NULL;
 		return 0;
@@ -581,36 +576,22 @@ static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
 
 	case OPT_ROOTMODE:
 		if (!fuse_valid_type(result.uint_32))
-			return invalfc(fsc, "Invalid rootmode");
+			return invalfc(fc, "Invalid rootmode");
 		ctx->rootmode = result.uint_32;
 		ctx->rootmode_present = true;
 		break;
 
 	case OPT_USER_ID:
-		kuid =  make_kuid(fsc->user_ns, result.uint_32);
-		if (!uid_valid(kuid))
-			return invalfc(fsc, "Invalid user_id");
-		/*
-		 * The requested uid must be representable in the
-		 * filesystem's idmapping.
-		 */
-		if (!kuid_has_mapping(fsc->user_ns, kuid))
-			return invalfc(fsc, "Invalid user_id");
-		ctx->user_id = kuid;
+		ctx->user_id = make_kuid(fc->user_ns, result.uint_32);
+		if (!uid_valid(ctx->user_id))
+			return invalfc(fc, "Invalid user_id");
 		ctx->user_id_present = true;
 		break;
 
 	case OPT_GROUP_ID:
-		kgid = make_kgid(fsc->user_ns, result.uint_32);;
-		if (!gid_valid(kgid))
-			return invalfc(fsc, "Invalid group_id");
-		/*
-		 * The requested gid must be representable in the
-		 * filesystem's idmapping.
-		 */
-		if (!kgid_has_mapping(fsc->user_ns, kgid))
-			return invalfc(fsc, "Invalid group_id");
-		ctx->group_id = kgid;
+		ctx->group_id = make_kgid(fc->user_ns, result.uint_32);
+		if (!gid_valid(ctx->group_id))
+			return invalfc(fc, "Invalid group_id");
 		ctx->group_id_present = true;
 		break;
 
@@ -628,7 +609,7 @@ static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
 
 	case OPT_BLKSIZE:
 		if (!ctx->is_bdev)
-			return invalfc(fsc, "blksize only supported for fuseblk");
+			return invalfc(fc, "blksize only supported for fuseblk");
 		ctx->blksize = result.uint_32;
 		break;
 
@@ -639,9 +620,9 @@ static int fuse_parse_param(struct fs_context *fsc, struct fs_parameter *param)
 	return 0;
 }
 
-static void fuse_free_fsc(struct fs_context *fsc)
+static void fuse_free_fc(struct fs_context *fc)
 {
-	struct fuse_fs_context *ctx = fsc->fs_private;
+	struct fuse_fs_context *ctx = fc->fs_private;
 
 	if (ctx) {
 		kfree(ctx->subtype);
@@ -1113,6 +1094,8 @@ static void process_init_reply(struct fuse_mount *fm, struct fuse_args *args,
 		fc->conn_error = 1;
 	}
 
+	ST_LOG("<%s> dev = %u:%u  fuse Initialized",
+			__func__, MAJOR(fc->dev), MINOR(fc->dev));
 	fuse_set_initialized(fc);
 	wake_up_all(&fc->blocked_waitq);
 }
@@ -1159,6 +1142,9 @@ void fuse_send_init(struct fuse_mount *fm)
 	ia->args.nocreds = true;
 	ia->args.end = process_init_reply;
 
+	ST_LOG("<%s> dev = %u:%u  fuse send Initrequest",
+			__func__, MAJOR(fm->fc->dev), MINOR(fm->fc->dev));
+
 	if (fuse_simple_background(fm, &ia->args, GFP_KERNEL) != 0)
 		process_init_reply(fm, &ia->args, -ENOTCONN);
 }
@@ -1197,14 +1183,15 @@ static int fuse_bdi_init(struct fuse_conn *fc, struct super_block *sb)
 		bdi_put(sb->s_bdi);
 		sb->s_bdi = &noop_backing_dev_info;
 	}
-	err = super_setup_bdi_name(sb, "%u:%u%s", MAJOR(fc->dev),
+	/* @fs.sec -- 9b4d962cc783453fc63e4302012c8e28e11e31a5 -- */
+	err = sec_super_setup_bdi_name(sb, "%u:%u%s", MAJOR(fc->dev),
 				   MINOR(fc->dev), suffix);
 	if (err)
 		return err;
 
 	/* fuse does it's own writeback accounting */
 	sb->s_bdi->capabilities &= ~BDI_CAP_WRITEBACK_ACCT;
-	sb->s_bdi->capabilities |= BDI_CAP_STRICTLIMIT;
+	sb->s_bdi->capabilities |= (BDI_CAP_STRICTLIMIT | BDI_CAP_SEC_DEBUG);
 
 	/*
 	 * For a single fuse filesystem use max 1% of dirty +
@@ -1524,9 +1511,9 @@ static int fuse_fill_super(struct super_block *sb, struct fs_context *fsc)
 	return err;
 }
 
-static int fuse_get_tree(struct fs_context *fsc)
+static int fuse_get_tree(struct fs_context *fc)
 {
-	struct fuse_fs_context *ctx = fsc->fs_private;
+	struct fuse_fs_context *ctx = fc->fs_private;
 
 	if (!ctx->fd_present || !ctx->rootmode_present ||
 	    !ctx->user_id_present || !ctx->group_id_present)
@@ -1534,14 +1521,14 @@ static int fuse_get_tree(struct fs_context *fsc)
 
 #ifdef CONFIG_BLOCK
 	if (ctx->is_bdev)
-		return get_tree_bdev(fsc, fuse_fill_super);
+		return get_tree_bdev(fc, fuse_fill_super);
 #endif
 
-	return get_tree_nodev(fsc, fuse_fill_super);
+	return get_tree_nodev(fc, fuse_fill_super);
 }
 
 static const struct fs_context_operations fuse_context_ops = {
-	.free		= fuse_free_fsc,
+	.free		= fuse_free_fc,
 	.parse_param	= fuse_parse_param,
 	.reconfigure	= fuse_reconfigure,
 	.get_tree	= fuse_get_tree,
@@ -1550,7 +1537,7 @@ static const struct fs_context_operations fuse_context_ops = {
 /*
  * Set up the filesystem mount context.
  */
-static int fuse_init_fs_context(struct fs_context *fsc)
+static int fuse_init_fs_context(struct fs_context *fc)
 {
 	struct fuse_fs_context *ctx;
 
@@ -1563,14 +1550,14 @@ static int fuse_init_fs_context(struct fs_context *fsc)
 	ctx->legacy_opts_show = true;
 
 #ifdef CONFIG_BLOCK
-	if (fsc->fs_type == &fuseblk_fs_type) {
+	if (fc->fs_type == &fuseblk_fs_type) {
 		ctx->is_bdev = true;
 		ctx->destroy = true;
 	}
 #endif
 
-	fsc->fs_private = ctx;
-	fsc->ops = &fuse_context_ops;
+	fc->fs_private = ctx;
+	fc->ops = &fuse_context_ops;
 	return 0;
 }
 

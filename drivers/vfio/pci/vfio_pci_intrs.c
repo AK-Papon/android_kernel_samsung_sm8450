@@ -29,21 +29,14 @@ static void vfio_send_intx_eventfd(void *opaque, void *unused)
 {
 	struct vfio_pci_device *vdev = opaque;
 
-	if (likely(is_intx(vdev) && !vdev->virq_disabled)) {
-		struct eventfd_ctx *trigger;
-
-		trigger = READ_ONCE(vdev->ctx[0].trigger);
-		if (likely(trigger))
-			eventfd_signal(trigger, 1);
-	}
+	if (likely(is_intx(vdev) && !vdev->virq_disabled))
+		eventfd_signal(vdev->ctx[0].trigger, 1);
 }
 
-static void __vfio_pci_intx_mask(struct vfio_pci_device *vdev)
+void vfio_pci_intx_mask(struct vfio_pci_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	unsigned long flags;
-
-	lockdep_assert_held(&vdev->igate);
 
 	spin_lock_irqsave(&vdev->irqlock, flags);
 
@@ -70,13 +63,6 @@ static void __vfio_pci_intx_mask(struct vfio_pci_device *vdev)
 	}
 
 	spin_unlock_irqrestore(&vdev->irqlock, flags);
-}
-
-void vfio_pci_intx_mask(struct vfio_pci_device *vdev)
-{
-	mutex_lock(&vdev->igate);
-	__vfio_pci_intx_mask(vdev);
-	mutex_unlock(&vdev->igate);
 }
 
 /*
@@ -121,19 +107,10 @@ static int vfio_pci_intx_unmask_handler(void *opaque, void *unused)
 	return ret;
 }
 
-static void __vfio_pci_intx_unmask(struct vfio_pci_device *vdev)
-{
-	lockdep_assert_held(&vdev->igate);
-
-	if (vfio_pci_intx_unmask_handler(vdev, NULL) > 0)
-		vfio_send_intx_eventfd(vdev, NULL);
-}
-
 void vfio_pci_intx_unmask(struct vfio_pci_device *vdev)
 {
-	mutex_lock(&vdev->igate);
-	__vfio_pci_intx_unmask(vdev);
-	mutex_unlock(&vdev->igate);
+	if (vfio_pci_intx_unmask_handler(vdev, NULL) > 0)
+		vfio_send_intx_eventfd(vdev, NULL);
 }
 
 static irqreturn_t vfio_intx_handler(int irq, void *dev_id)
@@ -162,23 +139,13 @@ static irqreturn_t vfio_intx_handler(int irq, void *dev_id)
 	return ret;
 }
 
-static int vfio_intx_enable(struct vfio_pci_device *vdev,
-			    struct eventfd_ctx *trigger)
+static int vfio_intx_enable(struct vfio_pci_device *vdev)
 {
-	struct pci_dev *pdev = vdev->pdev;
-	unsigned long irqflags;
-	char *name;
-	int ret;
-
 	if (!is_irq_none(vdev))
 		return -EINVAL;
 
-	if (!pdev->irq)
+	if (!vdev->pdev->irq)
 		return -ENODEV;
-
-	name = kasprintf(GFP_KERNEL, "vfio-intx(%s)", pci_name(pdev));
-	if (!name)
-		return -ENOMEM;
 
 	vdev->ctx = kzalloc(sizeof(struct vfio_pci_irq_ctx), GFP_KERNEL);
 	if (!vdev->ctx)
@@ -186,80 +153,81 @@ static int vfio_intx_enable(struct vfio_pci_device *vdev,
 
 	vdev->num_ctx = 1;
 
-	vdev->ctx[0].name = name;
-	vdev->ctx[0].trigger = trigger;
-
 	/*
-	 * Fill the initial masked state based on virq_disabled.  After
-	 * enable, changing the DisINTx bit in vconfig directly changes INTx
-	 * masking.  igate prevents races during setup, once running masked
-	 * is protected via irqlock.
-	 *
-	 * Devices supporting DisINTx also reflect the current mask state in
-	 * the physical DisINTx bit, which is not affected during IRQ setup.
-	 *
-	 * Devices without DisINTx support require an exclusive interrupt.
-	 * IRQ masking is performed at the IRQ chip.  Again, igate protects
-	 * against races during setup and IRQ handlers and irqfds are not
-	 * yet active, therefore masked is stable and can be used to
-	 * conditionally auto-enable the IRQ.
-	 *
-	 * irq_type must be stable while the IRQ handler is registered,
-	 * therefore it must be set before request_irq().
+	 * If the virtual interrupt is masked, restore it.  Devices
+	 * supporting DisINTx can be masked at the hardware level
+	 * here, non-PCI-2.3 devices will have to wait until the
+	 * interrupt is enabled.
 	 */
 	vdev->ctx[0].masked = vdev->virq_disabled;
-	if (vdev->pci_2_3) {
-		pci_intx(pdev, !vdev->ctx[0].masked);
-		irqflags = IRQF_SHARED;
-	} else {
-		irqflags = vdev->ctx[0].masked ? IRQF_NO_AUTOEN : 0;
-	}
+	if (vdev->pci_2_3)
+		pci_intx(vdev->pdev, !vdev->ctx[0].masked);
 
 	vdev->irq_type = VFIO_PCI_INTX_IRQ_INDEX;
-
-	ret = request_irq(pdev->irq, vfio_intx_handler,
-			  irqflags, vdev->ctx[0].name, vdev);
-	if (ret) {
-		vdev->irq_type = VFIO_PCI_NUM_IRQS;
-		kfree(name);
-		vdev->num_ctx = 0;
-		kfree(vdev->ctx);
-		return ret;
-	}
 
 	return 0;
 }
 
-static int vfio_intx_set_signal(struct vfio_pci_device *vdev,
-				struct eventfd_ctx *trigger)
+static int vfio_intx_set_signal(struct vfio_pci_device *vdev, int fd)
 {
 	struct pci_dev *pdev = vdev->pdev;
-	struct eventfd_ctx *old;
+	unsigned long irqflags = IRQF_SHARED;
+	struct eventfd_ctx *trigger;
+	unsigned long flags;
+	int ret;
 
-	old = vdev->ctx[0].trigger;
-
-	WRITE_ONCE(vdev->ctx[0].trigger, trigger);
-
-	/* Releasing an old ctx requires synchronizing in-flight users */
-	if (old) {
-		synchronize_irq(pdev->irq);
-		vfio_virqfd_flush_thread(&vdev->ctx[0].unmask);
-		eventfd_ctx_put(old);
+	if (vdev->ctx[0].trigger) {
+		free_irq(pdev->irq, vdev);
+		kfree(vdev->ctx[0].name);
+		eventfd_ctx_put(vdev->ctx[0].trigger);
+		vdev->ctx[0].trigger = NULL;
 	}
+
+	if (fd < 0) /* Disable only */
+		return 0;
+
+	vdev->ctx[0].name = kasprintf(GFP_KERNEL, "vfio-intx(%s)",
+				      pci_name(pdev));
+	if (!vdev->ctx[0].name)
+		return -ENOMEM;
+
+	trigger = eventfd_ctx_fdget(fd);
+	if (IS_ERR(trigger)) {
+		kfree(vdev->ctx[0].name);
+		return PTR_ERR(trigger);
+	}
+
+	vdev->ctx[0].trigger = trigger;
+
+	if (!vdev->pci_2_3)
+		irqflags = 0;
+
+	ret = request_irq(pdev->irq, vfio_intx_handler,
+			  irqflags, vdev->ctx[0].name, vdev);
+	if (ret) {
+		vdev->ctx[0].trigger = NULL;
+		kfree(vdev->ctx[0].name);
+		eventfd_ctx_put(trigger);
+		return ret;
+	}
+
+	/*
+	 * INTx disable will stick across the new irq setup,
+	 * disable_irq won't.
+	 */
+	spin_lock_irqsave(&vdev->irqlock, flags);
+	if (!vdev->pci_2_3 && vdev->ctx[0].masked)
+		disable_irq_nosync(pdev->irq);
+	spin_unlock_irqrestore(&vdev->irqlock, flags);
 
 	return 0;
 }
 
 static void vfio_intx_disable(struct vfio_pci_device *vdev)
 {
-	struct pci_dev *pdev = vdev->pdev;
-
 	vfio_virqfd_disable(&vdev->ctx[0].unmask);
 	vfio_virqfd_disable(&vdev->ctx[0].mask);
-	free_irq(pdev->irq, vdev);
-	if (vdev->ctx[0].trigger)
-		eventfd_ctx_put(vdev->ctx[0].trigger);
-	kfree(vdev->ctx[0].name);
+	vfio_intx_set_signal(vdev, -1);
 	vdev->irq_type = VFIO_PCI_NUM_IRQS;
 	vdev->num_ctx = 0;
 	kfree(vdev->ctx);
@@ -457,11 +425,11 @@ static int vfio_pci_set_intx_unmask(struct vfio_pci_device *vdev,
 		return -EINVAL;
 
 	if (flags & VFIO_IRQ_SET_DATA_NONE) {
-		__vfio_pci_intx_unmask(vdev);
+		vfio_pci_intx_unmask(vdev);
 	} else if (flags & VFIO_IRQ_SET_DATA_BOOL) {
 		uint8_t unmask = *(uint8_t *)data;
 		if (unmask)
-			__vfio_pci_intx_unmask(vdev);
+			vfio_pci_intx_unmask(vdev);
 	} else if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
 		int32_t fd = *(int32_t *)data;
 		if (fd >= 0)
@@ -484,11 +452,11 @@ static int vfio_pci_set_intx_mask(struct vfio_pci_device *vdev,
 		return -EINVAL;
 
 	if (flags & VFIO_IRQ_SET_DATA_NONE) {
-		__vfio_pci_intx_mask(vdev);
+		vfio_pci_intx_mask(vdev);
 	} else if (flags & VFIO_IRQ_SET_DATA_BOOL) {
 		uint8_t mask = *(uint8_t *)data;
 		if (mask)
-			__vfio_pci_intx_mask(vdev);
+			vfio_pci_intx_mask(vdev);
 	} else if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
 		return -ENOTTY; /* XXX implement me */
 	}
@@ -509,23 +477,19 @@ static int vfio_pci_set_intx_trigger(struct vfio_pci_device *vdev,
 		return -EINVAL;
 
 	if (flags & VFIO_IRQ_SET_DATA_EVENTFD) {
-		struct eventfd_ctx *trigger = NULL;
 		int32_t fd = *(int32_t *)data;
 		int ret;
 
-		if (fd >= 0) {
-			trigger = eventfd_ctx_fdget(fd);
-			if (IS_ERR(trigger))
-				return PTR_ERR(trigger);
-		}
-
 		if (is_intx(vdev))
-			ret = vfio_intx_set_signal(vdev, trigger);
-		else
-			ret = vfio_intx_enable(vdev, trigger);
+			return vfio_intx_set_signal(vdev, fd);
 
-		if (ret && trigger)
-			eventfd_ctx_put(trigger);
+		ret = vfio_intx_enable(vdev);
+		if (ret)
+			return ret;
+
+		ret = vfio_intx_set_signal(vdev, fd);
+		if (ret)
+			vfio_intx_disable(vdev);
 
 		return ret;
 	}

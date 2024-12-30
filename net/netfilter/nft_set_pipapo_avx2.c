@@ -71,6 +71,9 @@
 #define NFT_PIPAPO_AVX2_ZERO(reg)					\
 	asm volatile("vpxor %ymm" #reg ", %ymm" #reg ", %ymm" #reg)
 
+/* Current working bitmap index, toggled between field matches */
+static DEFINE_PER_CPU(bool, nft_pipapo_avx2_scratch_index);
+
 /**
  * nft_pipapo_avx2_prepare() - Prepare before main algorithm body
  *
@@ -1120,40 +1123,31 @@ bool nft_pipapo_avx2_lookup(const struct net *net, const struct nft_set *set,
 			    const u32 *key, const struct nft_set_ext **ext)
 {
 	struct nft_pipapo *priv = nft_set_priv(set);
-	struct nft_pipapo_scratch *scratch;
+	unsigned long *res, *fill, *scratch;
 	u8 genmask = nft_genmask_cur(net);
 	const u8 *rp = (const u8 *)key;
 	struct nft_pipapo_match *m;
 	struct nft_pipapo_field *f;
-	unsigned long *res, *fill;
 	bool map_index;
 	int i, ret = 0;
 
-	local_bh_disable();
-
-	if (unlikely(!irq_fpu_usable())) {
-		bool fallback_res = nft_pipapo_lookup(net, set, key, ext);
-
-		local_bh_enable();
-		return fallback_res;
-	}
+	if (unlikely(!irq_fpu_usable()))
+		return nft_pipapo_lookup(net, set, key, ext);
 
 	m = rcu_dereference(priv->match);
 
 	/* This also protects access to all data related to scratch maps */
 	kernel_fpu_begin();
 
-	scratch = *raw_cpu_ptr(m->scratch);
+	scratch = *raw_cpu_ptr(m->scratch_aligned);
 	if (unlikely(!scratch)) {
 		kernel_fpu_end();
-		local_bh_enable();
 		return false;
 	}
+	map_index = raw_cpu_read(nft_pipapo_avx2_scratch_index);
 
-	map_index = scratch->map_index;
-
-	res  = scratch->map + (map_index ? m->bsize_max : 0);
-	fill = scratch->map + (map_index ? 0 : m->bsize_max);
+	res  = scratch + (map_index ? m->bsize_max : 0);
+	fill = scratch + (map_index ? 0 : m->bsize_max);
 
 	/* Starting map doesn't need to be set for this implementation */
 
@@ -1225,9 +1219,8 @@ next_match:
 
 out:
 	if (i % 2)
-		scratch->map_index = !map_index;
+		raw_cpu_write(nft_pipapo_avx2_scratch_index, !map_index);
 	kernel_fpu_end();
-	local_bh_enable();
 
 	return ret >= 0;
 }

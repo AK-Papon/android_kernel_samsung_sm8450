@@ -19,6 +19,9 @@
 #include <linux/pm_domain.h>
 #include <linux/regulator/consumer.h>
 
+/* REVERTME: after duplicate OPP FIX */
+#include <linux/reboot.h>
+
 #include "opp.h"
 
 /*
@@ -1475,6 +1478,9 @@ static int _opp_is_duplicate(struct device *dev, struct dev_pm_opp *new_opp,
 			 __func__, opp->rate, opp->supplies[0].u_volt,
 			 opp->available, new_opp->rate,
 			 new_opp->supplies[0].u_volt, new_opp->available);
+		
+		/* REVERTME: after duplicate OPP FIX */
+		emergency_restart();
 
 		/* Should we compare voltages for all regulators here ? */
 		return opp->available &&

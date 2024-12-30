@@ -2093,8 +2093,8 @@ static void hclgevf_flr_done(struct hnae3_ae_dev *ae_dev)
 			 ret);
 
 	hdev->reset_type = HNAE3_NONE_RESET;
-	if (test_and_clear_bit(HCLGEVF_STATE_RST_HANDLING, &hdev->state))
-		up(&hdev->reset_sem);
+	clear_bit(HCLGEVF_STATE_RST_HANDLING, &hdev->state);
+	up(&hdev->reset_sem);
 }
 
 static u32 hclgevf_get_fw_version(struct hnae3_handle *handle)
@@ -2583,7 +2583,8 @@ static void hclgevf_set_timer_task(struct hnae3_handle *handle, bool enable)
 	} else {
 		set_bit(HCLGEVF_STATE_DOWN, &hdev->state);
 
-		smp_mb__after_atomic(); /* flush memory to make sure DOWN is seen by service task */
+		/* flush memory to make sure DOWN is seen by service task */
+		smp_mb__before_atomic();
 		hclgevf_flush_link_update(hdev);
 	}
 }

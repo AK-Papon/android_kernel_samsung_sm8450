@@ -602,7 +602,7 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
 				old_fb = plane->fb;
 
 			if (!old_fb) {
-				DRM_DEBUG_KMS("CRTC doesn't have current FB\n");
+				DRM_ERROR("CRTC doesn't have current FB\n");
 				ret = -EINVAL;
 				goto out;
 			}
@@ -627,7 +627,7 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
 		}
 		if (!file_priv->aspect_ratio_allowed &&
 		    (crtc_req->mode.flags & DRM_MODE_FLAG_PIC_AR_MASK) != DRM_MODE_FLAG_PIC_AR_NONE) {
-			DRM_DEBUG_KMS("Unexpected aspect-ratio flag bits\n");
+			DRM_ERROR("Unexpected aspect-ratio flag bits\n");
 			ret = -EINVAL;
 			goto out;
 		}
@@ -671,13 +671,13 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
 	}
 
 	if (crtc_req->count_connectors == 0 && mode) {
-		DRM_DEBUG_KMS("Count connectors is 0 but mode set\n");
+		DRM_ERROR("Count connectors is 0 but mode set\n");
 		ret = -EINVAL;
 		goto out;
 	}
 
 	if (crtc_req->count_connectors > 0 && (!mode || !fb)) {
-		DRM_DEBUG_KMS("Count connectors is %d but no mode or fb set\n",
+		DRM_ERROR("Count connectors is %d but no mode or fb set\n",
 			  crtc_req->count_connectors);
 		ret = -EINVAL;
 		goto out;
@@ -688,6 +688,8 @@ int drm_mode_setcrtc(struct drm_device *dev, void *data,
 
 		/* Avoid unbounded kernel memory allocation */
 		if (crtc_req->count_connectors > config->num_connector) {
+			DRM_ERROR("Count connectors(%d), num_connector(%d)\n",
+			  crtc_req->count_connectors, config->num_connector);
 			ret = -EINVAL;
 			goto out;
 		}
@@ -754,7 +756,6 @@ out:
 	connector_set = NULL;
 	fb = NULL;
 	mode = NULL;
-	num_connectors = 0;
 
 	DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
 

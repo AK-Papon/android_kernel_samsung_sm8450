@@ -138,6 +138,8 @@ __visible unsigned long xen_read_cr2_direct(void);
 
 /* These are not functions, and cannot be called normally */
 __visible void xen_iret(void);
+__visible void xen_sysret32(void);
+__visible void xen_sysret64(void);
 
 extern int xen_panic_handler_init(void);
 

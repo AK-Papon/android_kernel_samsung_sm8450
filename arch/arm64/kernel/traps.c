@@ -406,6 +406,9 @@ void do_undefinstr(struct pt_regs *regs)
 	if (call_undef_hook(regs) == 0)
 		return;
 
+	pr_emerg("[QCT]pc : %016llx\n", regs->pc);
+	dump_kernel_instr(KERN_EMERG, regs); 
+
 	trace_android_rvh_do_undefinstr(regs, user_mode(regs));
 	BUG_ON(!user_mode(regs));
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);

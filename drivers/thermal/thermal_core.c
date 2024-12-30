@@ -20,6 +20,7 @@
 #include <linux/string.h>
 #include <linux/of.h>
 #include <linux/suspend.h>
+#include <linux/kernel.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/thermal.h>
@@ -28,6 +29,9 @@
 
 #include "thermal_core.h"
 #include "thermal_hwmon.h"
+
+/* cooling device state */
+static struct delayed_work cdev_print_work;
 
 static DEFINE_IDA(thermal_tz_ida);
 static DEFINE_IDA(thermal_cdev_ida);
@@ -44,6 +48,8 @@ static atomic_t in_suspend;
 static bool power_off_triggered;
 
 static struct thermal_governor *def_governor;
+
+static bool thermal_shutdown_triggered; // SEC_PM
 
 /*
  * Governor section: set of functions to handle thermal governors
@@ -362,6 +368,12 @@ static void thermal_emergency_poweroff_func(struct work_struct *work)
 static DECLARE_DELAYED_WORK(thermal_emergency_poweroff_work,
 			    thermal_emergency_poweroff_func);
 
+bool thermal_poweroff_running(void) // SEC_PM
+{
+	return thermal_shutdown_triggered;
+}
+EXPORT_SYMBOL_GPL(thermal_poweroff_running);
+
 /**
  * thermal_emergency_poweroff - Trigger an emergency system poweroff
  *
@@ -401,12 +413,16 @@ static void handle_critical_trips(struct thermal_zone_device *tz,
 		dev_emerg(&tz->device,
 			  "critical temperature reached (%d C), shutting down\n",
 			  tz->temperature / 1000);
+		if (!power_off_triggered) {
+			panic("THERMAL_TRIP_CRITICAL");
+		}
 		mutex_lock(&poweroff_lock);
 		if (!power_off_triggered) {
 			/*
 			 * Queue a backup emergency shutdown in the event of
 			 * orderly_poweroff failure
 			 */
+			thermal_shutdown_triggered = true; // SEC_PM
 			thermal_emergency_poweroff();
 			orderly_poweroff(true);
 			power_off_triggered = true;
@@ -1133,6 +1149,7 @@ __thermal_cooling_device_register(struct device_node *np,
 		put_device(&cdev->device);
 		return ERR_PTR(result);
 	}
+	pr_info("register cooling_device%d-%s\n", cdev->id, cdev->type);
 
 	/* Add 'this' new cdev to the global cdev list */
 	mutex_lock(&thermal_list_lock);
@@ -1614,6 +1631,35 @@ exit:
 }
 EXPORT_SYMBOL_GPL(thermal_zone_get_zone_by_name);
 
+#define BUF_SIZE	SZ_1K
+static void __ref cdev_print(struct work_struct *work)
+{
+	struct thermal_cooling_device *cdev;
+	unsigned long cur_state = 0;
+	int added = 0, ret = 0;
+	char buffer[BUF_SIZE] = { 0, };
+
+	mutex_lock(&thermal_list_lock);
+	list_for_each_entry(cdev, &thermal_cdev_list, node) {
+		if (cdev->ops->get_cur_state)
+			cdev->ops->get_cur_state(cdev, &cur_state);
+
+		if (cur_state) {
+			ret = snprintf(buffer + added, sizeof(buffer) - added,
+					   "[%s:%ld]", cdev->type, cur_state);
+			added += ret;
+
+			if (added >= BUF_SIZE)
+				break;
+		}
+	}
+	mutex_unlock(&thermal_list_lock);
+
+	pr_info("thermal: cdev%s\n", buffer);
+
+	schedule_delayed_work(&cdev_print_work, HZ * 5);
+}
+
 static int thermal_pm_notify(struct notifier_block *nb,
 			     unsigned long mode, void *_unused)
 {
@@ -1624,6 +1670,7 @@ static int thermal_pm_notify(struct notifier_block *nb,
 	case PM_HIBERNATION_PREPARE:
 	case PM_RESTORE_PREPARE:
 	case PM_SUSPEND_PREPARE:
+		cancel_delayed_work(&cdev_print_work);
 		atomic_set(&in_suspend, 1);
 		break;
 	case PM_POST_HIBERNATION:
@@ -1634,6 +1681,10 @@ static int thermal_pm_notify(struct notifier_block *nb,
 			if (!thermal_zone_device_is_enabled(tz))
 				continue;
 
+			/* to optimize wakeup time */
+			if (tz->polling_delay == 0)
+				continue;
+
 			trace_android_vh_thermal_pm_notify_suspend(tz, &irq_wakeable);
 			if (irq_wakeable)
 				continue;
@@ -1642,6 +1693,7 @@ static int thermal_pm_notify(struct notifier_block *nb,
 			thermal_zone_device_update(tz,
 						   THERMAL_EVENT_UNSPECIFIED);
 		}
+		schedule_delayed_work(&cdev_print_work, 0);
 		break;
 	default:
 		break;
@@ -1677,6 +1729,9 @@ static int __init thermal_init(void)
 	if (result)
 		pr_warn("Thermal: Can not register suspend notifier, return %d\n",
 			result);
+
+	INIT_DELAYED_WORK(&cdev_print_work, cdev_print);
+	schedule_delayed_work(&cdev_print_work, 0);
 
 	return 0;
 

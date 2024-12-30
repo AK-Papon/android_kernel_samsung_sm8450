@@ -14,6 +14,7 @@
 #include <linux/pid.h>
 #include <linux/sem.h>
 #include <linux/shm.h>
+#include <linux/kcov.h>
 #include <linux/mutex.h>
 #include <linux/plist.h>
 #include <linux/hrtimer.h>
@@ -1322,6 +1323,11 @@ struct task_struct {
 
 	/* Used by memcontrol for targeted memcg charge: */
 	struct mem_cgroup		*active_memcg;
+#endif
+
+#ifdef CONFIG_TASK_HAS_ALLOC_FREE_STAT
+	unsigned long long alloc_sum;
+	unsigned long long free_sum;
 #endif
 
 #ifdef CONFIG_BLK_CGROUP

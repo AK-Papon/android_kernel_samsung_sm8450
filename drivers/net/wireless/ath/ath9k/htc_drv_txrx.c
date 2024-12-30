@@ -647,10 +647,9 @@ void ath9k_htc_txstatus(struct ath9k_htc_priv *priv, void *wmi_event)
 	struct ath9k_htc_tx_event *tx_pend;
 	int i;
 
-	if (WARN_ON_ONCE(txs->cnt > HTC_MAX_TX_STATUS))
-		return;
-
 	for (i = 0; i < txs->cnt; i++) {
+		WARN_ON(txs->cnt > HTC_MAX_TX_STATUS);
+
 		__txs = &txs->txstatus[i];
 
 		skb = ath9k_htc_tx_get_packet(priv, __txs);
@@ -809,6 +808,10 @@ int ath9k_tx_init(struct ath9k_htc_priv *priv)
 	skb_queue_head_init(&priv->tx.data_vi_queue);
 	skb_queue_head_init(&priv->tx.data_vo_queue);
 	skb_queue_head_init(&priv->tx.tx_failed);
+
+	/* Allow ath9k_wmi_event_tasklet(WMI_TXSTATUS_EVENTID) to operate. */
+	smp_wmb();
+	priv->tx.initialized = true;
 
 	return 0;
 }

@@ -771,7 +771,7 @@ static void qrtr_ns_data_ready(struct sock *sk)
 	queue_work(qrtr_ns.workqueue, &qrtr_ns.work);
 }
 
-int qrtr_ns_init(void)
+void qrtr_ns_init(void)
 {
 	struct sockaddr_qrtr sq;
 	int ret;
@@ -782,7 +782,7 @@ int qrtr_ns_init(void)
 	ret = sock_create_kern(&init_net, AF_QIPCRTR, SOCK_DGRAM,
 			       PF_QIPCRTR, &qrtr_ns.sock);
 	if (ret < 0)
-		return ret;
+		return;
 
 	ret = kernel_getsockname(qrtr_ns.sock, (struct sockaddr *)&sq);
 	if (ret < 0) {
@@ -815,31 +815,12 @@ int qrtr_ns_init(void)
 	if (ret < 0)
 		goto err_wq;
 
-	/* As the qrtr ns socket owner and creator is the same module, we have
-	 * to decrease the qrtr module reference count to guarantee that it
-	 * remains zero after the ns socket is created, otherwise, executing
-	 * "rmmod" command is unable to make the qrtr module deleted after the
-	 *  qrtr module is inserted successfully.
-	 *
-	 * However, the reference count is increased twice in
-	 * sock_create_kern(): one is to increase the reference count of owner
-	 * of qrtr socket's proto_ops struct; another is to increment the
-	 * reference count of owner of qrtr proto struct. Therefore, we must
-	 * decrement the module reference count twice to ensure that it keeps
-	 * zero after server's listening socket is created. Of course, we
-	 * must bump the module reference count twice as well before the socket
-	 * is closed.
-	 */
-	module_put(qrtr_ns.sock->ops->owner);
-	module_put(qrtr_ns.sock->sk->sk_prot_creator->owner);
-
-	return 0;
+	return;
 
 err_wq:
 	destroy_workqueue(qrtr_ns.workqueue);
 err_sock:
 	sock_release(qrtr_ns.sock);
-	return ret;
 }
 EXPORT_SYMBOL_GPL(qrtr_ns_init);
 
@@ -847,15 +828,6 @@ void qrtr_ns_remove(void)
 {
 	cancel_work_sync(&qrtr_ns.work);
 	destroy_workqueue(qrtr_ns.workqueue);
-
-	/* sock_release() expects the two references that were put during
-	 * qrtr_ns_init(). This function is only called during module remove,
-	 * so try_stop_module() has already set the refcnt to 0. Use
-	 * __module_get() instead of try_module_get() to successfully take two
-	 * references.
-	 */
-	__module_get(qrtr_ns.sock->ops->owner);
-	__module_get(qrtr_ns.sock->sk->sk_prot_creator->owner);
 	sock_release(qrtr_ns.sock);
 }
 EXPORT_SYMBOL_GPL(qrtr_ns_remove);

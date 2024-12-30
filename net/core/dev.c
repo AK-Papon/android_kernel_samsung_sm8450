@@ -2208,28 +2208,14 @@ static inline void net_timestamp_set(struct sk_buff *skb)
 
 bool is_skb_forwardable(const struct net_device *dev, const struct sk_buff *skb)
 {
-	unsigned int len;
-
-	if (!(dev->flags & IFF_UP))
-		return false;
-
-	len = dev->mtu + dev->hard_header_len + VLAN_HLEN;
-	if (skb->len <= len)
-		return true;
-
-	/* if TSO is enabled, we don't care about the length as the packet
-	 * could be forwarded without being segmented before
-	 */
-	if (skb_is_gso(skb))
-		return true;
-
-	return false;
+	return __is_skb_forwardable(dev, skb, true);
 }
 EXPORT_SYMBOL_GPL(is_skb_forwardable);
 
-int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
+static int __dev_forward_skb2(struct net_device *dev, struct sk_buff *skb,
+			      bool check_mtu)
 {
-	int ret = ____dev_forward_skb(dev, skb);
+	int ret = ____dev_forward_skb(dev, skb, check_mtu);
 
 	if (likely(!ret)) {
 		skb->protocol = eth_type_trans(skb, dev);
@@ -2237,6 +2223,11 @@ int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
 	}
 
 	return ret;
+}
+
+int __dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
+{
+	return __dev_forward_skb2(dev, skb, true);
 }
 EXPORT_SYMBOL_GPL(__dev_forward_skb);
 
@@ -2263,6 +2254,11 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
 	return __dev_forward_skb(dev, skb) ?: netif_rx_internal(skb);
 }
 EXPORT_SYMBOL_GPL(dev_forward_skb);
+
+int dev_forward_skb_nomtu(struct net_device *dev, struct sk_buff *skb)
+{
+	return __dev_forward_skb2(dev, skb, false) ?: netif_rx_internal(skb);
+}
 
 static inline int deliver_skb(struct sk_buff *skb,
 			      struct packet_type *pt_prev,
@@ -2331,7 +2327,7 @@ void dev_queue_xmit_nit(struct sk_buff *skb, struct net_device *dev)
 	rcu_read_lock();
 again:
 	list_for_each_entry_rcu(ptype, ptype_list, list) {
-		if (READ_ONCE(ptype->ignore_outgoing))
+		if (ptype->ignore_outgoing)
 			continue;
 
 		/* Never send packets back to the socket
@@ -3652,22 +3648,7 @@ int skb_csum_hwoffload_help(struct sk_buff *skb,
 		return !!(features & NETIF_F_SCTP_CRC) ? 0 :
 			skb_crc32c_csum_help(skb);
 
-	if (features & NETIF_F_HW_CSUM)
-		return 0;
-
-	if (features & (NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM)) {
-		if (vlan_get_protocol(skb) == htons(ETH_P_IPV6) &&
-		    skb_network_header_len(skb) != sizeof(struct ipv6hdr))
-			goto sw_checksum;
-		switch (skb->csum_offset) {
-		case offsetof(struct tcphdr, check):
-		case offsetof(struct udphdr, check):
-			return 0;
-		}
-	}
-
-sw_checksum:
-	return skb_checksum_help(skb);
+	return !!(features & NETIF_F_CSUM_MASK) ? 0 : skb_checksum_help(skb);
 }
 EXPORT_SYMBOL(skb_csum_hwoffload_help);
 
@@ -3779,7 +3760,7 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 						sizeof(_tcphdr), &_tcphdr);
 			if (likely(th))
 				hdr_len += __tcp_hdrlen(th);
-		} else if (shinfo->gso_type & SKB_GSO_UDP_L4) {
+		} else {
 			struct udphdr _udphdr;
 
 			if (skb_header_pointer(skb, skb_transport_offset(skb),
@@ -3787,14 +3768,10 @@ static void qdisc_pkt_len_init(struct sk_buff *skb)
 				hdr_len += sizeof(struct udphdr);
 		}
 
-		if (unlikely(shinfo->gso_type & SKB_GSO_DODGY)) {
-			int payload = skb->len - hdr_len;
+		if (shinfo->gso_type & SKB_GSO_DODGY)
+			gso_segs = DIV_ROUND_UP(skb->len - hdr_len,
+						shinfo->gso_size);
 
-			/* Malicious packet. */
-			if (payload <= 0)
-				return;
-			gso_segs = DIV_ROUND_UP(payload, shinfo->gso_size);
-		}
 		qdisc_skb_cb(skb)->pkt_len += (gso_segs - 1) * hdr_len;
 	}
 }
@@ -10241,9 +10218,8 @@ static void netdev_wait_allrefs(struct net_device *dev)
 			rebroadcast_time = jiffies;
 		}
 
-		rcu_barrier();
-
 		if (!wait) {
+			rcu_barrier();
 			wait = WAIT_REFS_MIN_MSECS;
 		} else {
 			msleep(wait);

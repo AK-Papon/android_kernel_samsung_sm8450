@@ -437,10 +437,12 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	struct netem_sched_data *q = qdisc_priv(sch);
 	/* We don't fill cb now as skb_unshare() may invalidate it */
 	struct netem_skb_cb *cb;
-	struct sk_buff *skb2 = NULL;
+	struct sk_buff *skb2;
 	struct sk_buff *segs = NULL;
 	unsigned int prev_len = qdisc_pkt_len(skb);
 	int count = 1;
+	int rc = NET_XMIT_SUCCESS;
+	int rc_drop = NET_XMIT_DROP;
 
 	/* Do not fool qdisc_drop_all() */
 	skb->prev = NULL;
@@ -469,11 +471,19 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		skb_orphan_partial(skb);
 
 	/*
-	 * If we need to duplicate packet, then clone it before
-	 * original is modified.
+	 * If we need to duplicate packet, then re-insert at top of the
+	 * qdisc tree, since parent queuer expects that only one
+	 * skb will be queued.
 	 */
-	if (count > 1)
-		skb2 = skb_clone(skb, GFP_ATOMIC);
+	if (count > 1 && (skb2 = skb_clone(skb, GFP_ATOMIC)) != NULL) {
+		struct Qdisc *rootq = qdisc_root_bh(sch);
+		u32 dupsave = q->duplicate; /* prevent duplicating a dup... */
+
+		q->duplicate = 0;
+		rootq->enqueue(skb2, rootq, to_free);
+		q->duplicate = dupsave;
+		rc_drop = NET_XMIT_SUCCESS;
+	}
 
 	/*
 	 * Randomized packet corruption.
@@ -485,8 +495,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		if (skb_is_gso(skb)) {
 			skb = netem_segment(skb, sch, to_free);
 			if (!skb)
-				goto finish_segs;
-
+				return rc_drop;
 			segs = skb->next;
 			skb_mark_not_on_list(skb);
 			qdisc_skb_cb(skb)->pkt_len = skb->len;
@@ -512,24 +521,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		/* re-link segs, so that qdisc_drop_all() frees them all */
 		skb->next = segs;
 		qdisc_drop_all(skb, sch, to_free);
-		if (skb2)
-			__qdisc_drop(skb2, to_free);
-		return NET_XMIT_DROP;
-	}
-
-	/*
-	 * If doing duplication then re-insert at top of the
-	 * qdisc tree, since parent queuer expects that only one
-	 * skb will be queued.
-	 */
-	if (skb2) {
-		struct Qdisc *rootq = qdisc_root_bh(sch);
-		u32 dupsave = q->duplicate; /* prevent duplicating a dup... */
-
-		q->duplicate = 0;
-		rootq->enqueue(skb2, rootq, to_free);
-		q->duplicate = dupsave;
-		skb2 = NULL;
+		return rc_drop;
 	}
 
 	qdisc_qstats_backlog_inc(sch, skb);
@@ -600,12 +592,9 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 
 finish_segs:
-	if (skb2)
-		__qdisc_drop(skb2, to_free);
-
 	if (segs) {
 		unsigned int len, last_len;
-		int rc, nb;
+		int nb;
 
 		len = skb ? skb->len : 0;
 		nb = skb ? 1 : 0;
@@ -733,10 +722,11 @@ deliver:
 
 				err = qdisc_enqueue(skb, q->qdisc, &to_free);
 				kfree_skb_list(to_free);
-				if (err != NET_XMIT_SUCCESS) {
-					if (net_xmit_drop_count(err))
-						qdisc_qstats_drop(sch);
-					qdisc_tree_reduce_backlog(sch, 1, pkt_len);
+				if (err != NET_XMIT_SUCCESS &&
+				    net_xmit_drop_count(err)) {
+					qdisc_qstats_drop(sch);
+					qdisc_tree_reduce_backlog(sch, 1,
+								  pkt_len);
 				}
 				goto tfifo_dequeue;
 			}

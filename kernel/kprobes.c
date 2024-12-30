@@ -43,6 +43,10 @@
 #include <asm/errno.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_RKP
+#include <linux/rkp.h>
+#endif
+
 #define KPROBE_HASH_BITS 6
 #define KPROBE_TABLE_SIZE (1 << KPROBE_HASH_BITS)
 
@@ -118,6 +122,9 @@ void __weak *alloc_insn_page(void)
 
 void __weak free_insn_page(void *page)
 {
+#ifdef CONFIG_RKP
+	uh_call(UH_APP_RKP, RKP_KPROBE_PAGE, (u64)page, 4096, 1, 0);
+#endif
 	module_memfree(page);
 }
 
@@ -1609,10 +1616,14 @@ static inline int check_kprobe_rereg(struct kprobe *p)
 
 int __weak arch_check_ftrace_location(struct kprobe *p)
 {
-	unsigned long addr = (unsigned long)p->addr;
+	unsigned long ftrace_addr;
 
-	if (ftrace_location(addr) == addr) {
+	ftrace_addr = ftrace_location((unsigned long)p->addr);
+	if (ftrace_addr) {
 #ifdef CONFIG_KPROBES_ON_FTRACE
+		/* Given address is not on the instruction boundary */
+		if ((unsigned long)p->addr != ftrace_addr)
+			return -EILSEQ;
 		p->flags |= KPROBE_FLAG_FTRACE;
 #else	/* !CONFIG_KPROBES_ON_FTRACE */
 		return -EINVAL;
@@ -1628,8 +1639,8 @@ static bool is_cfi_preamble_symbol(unsigned long addr)
 	if (lookup_symbol_name(addr, symbuf))
 		return false;
 
-	return str_has_prefix(symbuf, "__cfi_") ||
-		str_has_prefix(symbuf, "__pfx_");
+	return str_has_prefix("__cfi_", symbuf) ||
+		str_has_prefix("__pfx_", symbuf);
 }
 
 static int check_kprobe_address_safe(struct kprobe *p,
@@ -1643,17 +1654,10 @@ static int check_kprobe_address_safe(struct kprobe *p,
 	jump_label_lock();
 	preempt_disable();
 
-	/* Ensure the address is in a text area, and find a module if exists. */
-	*probed_mod = NULL;
-	if (!core_kernel_text((unsigned long) p->addr)) {
-		*probed_mod = __module_text_address((unsigned long) p->addr);
-		if (!(*probed_mod)) {
-			ret = -EINVAL;
-			goto out;
-		}
-	}
-	/* Ensure it is not in reserved area. */
-	if (in_gate_area_no_mm((unsigned long) p->addr) ||
+	/* Ensure it is not in reserved area nor out of text */
+	if (!(core_kernel_text((unsigned long) p->addr) ||
+	    is_module_text_address((unsigned long) p->addr)) ||
+	    in_gate_area_no_mm((unsigned long) p->addr) ||
 	    within_kprobe_blacklist((unsigned long) p->addr) ||
 	    jump_label_text_reserved(p->addr, p->addr) ||
 	    static_call_text_reserved(p->addr, p->addr) ||
@@ -1663,7 +1667,8 @@ static int check_kprobe_address_safe(struct kprobe *p,
 		goto out;
 	}
 
-	/* Get module refcount and reject __init functions for loaded modules. */
+	/* Check if are we probing a module */
+	*probed_mod = __module_text_address((unsigned long) p->addr);
 	if (*probed_mod) {
 		/*
 		 * We must hold a refcount of the probed module while updating

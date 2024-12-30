@@ -101,10 +101,12 @@ int usb_ep_enable(struct usb_ep *ep)
 		goto out;
 
 	/* UDC drivers can't handle endpoints with maxpacket size 0 */
-	if (!ep->desc || usb_endpoint_maxp(ep->desc) == 0) {
-		WARN_ONCE(1, "%s: ep%d (%s) has %s\n", __func__, ep->address, ep->name,
-			  (!ep->desc) ? "NULL descriptor" : "maxpacket 0");
-
+	if (usb_endpoint_maxp(ep->desc) == 0) {
+		/*
+		 * We should log an error message here, but we can't call
+		 * dev_err() because there's no way to find the gadget
+		 * given only ep.
+		 */
 		ret = -EINVAL;
 		goto out;
 	}
@@ -273,9 +275,7 @@ int usb_ep_queue(struct usb_ep *ep,
 {
 	int ret = 0;
 
-	if (!ep->enabled && ep->address) {
-		pr_debug("USB gadget: queue request to disabled ep 0x%x (%s)\n",
-				 ep->address, ep->name);
+	if (WARN_ON_ONCE(!ep->enabled && ep->address)) {
 		ret = -ESHUTDOWN;
 		goto out;
 	}
@@ -1499,7 +1499,7 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 {
 	int ret;
 
-	dev_dbg(&udc->dev, "registering UDC driver [%s]\n",
+	dev_err(&udc->dev, "registering UDC driver [%s]\n",
 			driver->function);
 
 	udc->driver = driver;
@@ -1508,8 +1508,11 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 	usb_gadget_udc_set_speed(udc, driver->max_speed);
 
 	ret = driver->bind(udc->gadget, driver);
-	if (ret)
+	if (ret) {
+		dev_err(&udc->dev, "driver->bind fail - ret: %d\n",
+			ret);
 		goto err1;
+	}
 	ret = usb_gadget_udc_start(udc);
 	if (ret)
 		goto err_start;

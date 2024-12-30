@@ -656,16 +656,7 @@ retry_dn:
 		 */
 		if (dest == NEW_ADDR) {
 			f2fs_truncate_data_blocks_range(&dn, 1);
-			do {
-				err = f2fs_reserve_new_block(&dn);
-				if (err == -ENOSPC) {
-					f2fs_bug_on(sbi, 1);
-					break;
-				}
-			} while (err &&
-				IS_ENABLED(CONFIG_F2FS_FAULT_INJECTION));
-			if (err)
-				goto err;
+			f2fs_reserve_new_block(&dn);
 			continue;
 		}
 
@@ -673,14 +664,12 @@ retry_dn:
 		if (f2fs_is_valid_blkaddr(sbi, dest, META_POR)) {
 
 			if (src == NULL_ADDR) {
-				do {
+				err = f2fs_reserve_new_block(&dn);
+				while (err &&
+				       IS_ENABLED(CONFIG_F2FS_FAULT_INJECTION))
 					err = f2fs_reserve_new_block(&dn);
-					if (err == -ENOSPC) {
-						f2fs_bug_on(sbi, 1);
-						break;
-					}
-				} while (err &&
-					IS_ENABLED(CONFIG_F2FS_FAULT_INJECTION));
+				/* We should not get -ENOSPC */
+				f2fs_bug_on(sbi, err);
 				if (err)
 					goto err;
 			}
@@ -870,8 +859,6 @@ skip:
 	if (!err && fix_curseg_write_pointer && !f2fs_readonly(sbi->sb) &&
 			f2fs_sb_has_blkzoned(sbi)) {
 		err = f2fs_fix_curseg_write_pointer(sbi);
-		if (!err)
-			err = f2fs_check_write_pointer(sbi);
 		ret = err;
 	}
 

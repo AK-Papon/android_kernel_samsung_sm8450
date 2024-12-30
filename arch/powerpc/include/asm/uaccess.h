@@ -186,20 +186,9 @@ do {								\
 		:						\
 		: label)
 
-#ifdef CONFIG_CC_IS_CLANG
-#define DS_FORM_CONSTRAINT "Z<>"
-#else
-#define DS_FORM_CONSTRAINT "YZ<>"
-#endif
-
 #ifdef __powerpc64__
-#define __put_user_asm2_goto(x, addr, label)			\
-	asm goto ("1: std%U1%X1 %0,%1	# put_user\n"		\
-		EX_TABLE(1b, %l2)				\
-		:						\
-		: "r" (x), DS_FORM_CONSTRAINT (*addr)		\
-		:						\
-		: label)
+#define __put_user_asm2_goto(x, ptr, label)			\
+	__put_user_asm_goto(x, ptr, label, "std")
 #else /* __powerpc64__ */
 #define __put_user_asm2_goto(x, addr, label)			\
 	asm_volatile_goto(					\

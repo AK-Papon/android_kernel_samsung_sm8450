@@ -149,7 +149,6 @@ static int verify_newsa_info(struct xfrm_usersa_info *p,
 			     struct nlattr **attrs)
 {
 	int err;
-	u16 family = p->sel.family;
 
 	err = -EINVAL;
 	switch (p->family) {
@@ -168,10 +167,7 @@ static int verify_newsa_info(struct xfrm_usersa_info *p,
 		goto out;
 	}
 
-	if (!family && !(p->flags & XFRM_STATE_AF_UNSPEC))
-		family = p->family;
-
-	switch (family) {
+	switch (p->sel.family) {
 	case AF_UNSPEC:
 		break;
 
@@ -1743,9 +1739,6 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
 
 	if (xp->xfrm_nr == 0)
 		return 0;
-
-	if (xp->xfrm_nr > XFRM_MAX_DEPTH)
-		return -ENOBUFS;
 
 	for (i = 0; i < xp->xfrm_nr; i++) {
 		struct xfrm_user_tmpl *up = &vec[i];

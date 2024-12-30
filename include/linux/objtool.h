@@ -141,12 +141,6 @@ struct unwind_hint {
 	.popsection
 .endm
 
-.macro STACK_FRAME_NON_STANDARD func:req
-	.pushsection .discard.func_stack_frame_non_standard, "aw"
-		.long \func - .
-	.popsection
-.endm
-
 #endif /* __ASSEMBLY__ */
 
 #else /* !CONFIG_STACK_VALIDATION */
@@ -163,8 +157,6 @@ struct unwind_hint {
 .macro UNWIND_HINT type:req sp_reg=0 sp_offset=0 end=0
 .endm
 .macro ANNOTATE_NOENDBR
-.endm
-.macro STACK_FRAME_NON_STANDARD func:req
 .endm
 #endif
 

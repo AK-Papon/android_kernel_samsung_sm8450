@@ -831,7 +831,6 @@ static void ffs_user_copy_worker(struct work_struct *work)
 	int ret = io_data->req->status ? io_data->req->status :
 					 io_data->req->actual;
 	bool kiocb_has_eventfd = io_data->kiocb->ki_flags & IOCB_EVENTFD;
-	unsigned long flags;
 
 	if (io_data->read && ret > 0) {
 		kthread_use_mm(io_data->mm);
@@ -844,10 +843,7 @@ static void ffs_user_copy_worker(struct work_struct *work)
 	if (io_data->ffs->ffs_eventfd && !kiocb_has_eventfd)
 		eventfd_signal(io_data->ffs->ffs_eventfd, 1);
 
-	spin_lock_irqsave(&io_data->ffs->eps_lock, flags);
 	usb_ep_free_request(io_data->ep, io_data->req);
-	io_data->req = NULL;
-	spin_unlock_irqrestore(&io_data->ffs->eps_lock, flags);
 
 	if (io_data->read)
 		kfree(io_data->to_free);
@@ -3296,6 +3292,8 @@ static int ffs_func_bind(struct usb_configuration *c,
 	struct ffs_function *func = ffs_func_from_usb(f);
 	int ret;
 
+	pr_err("[USB] %s\n", __func__);
+
 	if (IS_ERR(ffs_opts))
 		return PTR_ERR(ffs_opts);
 
@@ -3412,12 +3410,13 @@ static int ffs_func_setup(struct usb_function *f,
 	}
 
 	spin_lock_irqsave(&ffs->ev.waitq.lock, flags);
+
 	ffs->ev.setup = *creq;
 	ffs->ev.setup.wIndex = cpu_to_le16(ret);
 	__ffs_event_add(ffs, FUNCTIONFS_SETUP);
 	spin_unlock_irqrestore(&ffs->ev.waitq.lock, flags);
 
-	return ffs->ev.setup.wLength == 0 ? USB_GADGET_DELAYED_STATUS : 0;
+	return creq->wLength == 0 ? USB_GADGET_DELAYED_STATUS : 0;
 }
 
 static bool ffs_func_req_match(struct usb_function *f,

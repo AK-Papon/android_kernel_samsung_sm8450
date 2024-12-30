@@ -1298,7 +1298,6 @@ ENDPROC(stack_overflow)
 
 #endif
 	.section .rodata, "a"
-	.balign	8
 #define SYSCALL(esame,emu)	.quad __s390x_ ## esame
 	.globl	sys_call_table
 sys_call_table:

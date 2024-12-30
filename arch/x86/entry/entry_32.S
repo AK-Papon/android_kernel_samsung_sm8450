@@ -20,7 +20,7 @@
  *	1C(%esp) - %ds
  *	20(%esp) - %es
  *	24(%esp) - %fs
- *	28(%esp) - unused -- was %gs on old stackprotector kernels
+ *	28(%esp) - %gs		saved iff !CONFIG_X86_32_LAZY_GS
  *	2C(%esp) - orig_eax
  *	30(%esp) - %eip
  *	34(%esp) - %cs
@@ -56,9 +56,14 @@
 /*
  * User gs save/restore
  *
- * This is leftover junk from CONFIG_X86_32_LAZY_GS.  A subsequent patch
- * will remove it entirely.
+ * %gs is used for userland TLS and kernel only uses it for stack
+ * canary which is required to be at %gs:20 by gcc.  Read the comment
+ * at the top of stackprotector.h for more info.
+ *
+ * Local labels 98 and 99 are used.
  */
+#ifdef CONFIG_X86_32_LAZY_GS
+
  /* unfortunately push/pop can't be no-op */
 .macro PUSH_GS
 	pushl	$0
@@ -81,6 +86,49 @@
 .macro SET_KERNEL_GS reg
 .endm
 
+#else	/* CONFIG_X86_32_LAZY_GS */
+
+.macro PUSH_GS
+	pushl	%gs
+.endm
+
+.macro POP_GS pop=0
+98:	popl	%gs
+  .if \pop <> 0
+	add	$\pop, %esp
+  .endif
+.endm
+.macro POP_GS_EX
+.pushsection .fixup, "ax"
+99:	movl	$0, (%esp)
+	jmp	98b
+.popsection
+	_ASM_EXTABLE(98b, 99b)
+.endm
+
+.macro PTGS_TO_GS
+98:	mov	PT_GS(%esp), %gs
+.endm
+.macro PTGS_TO_GS_EX
+.pushsection .fixup, "ax"
+99:	movl	$0, PT_GS(%esp)
+	jmp	98b
+.popsection
+	_ASM_EXTABLE(98b, 99b)
+.endm
+
+.macro GS_TO_REG reg
+	movl	%gs, \reg
+.endm
+.macro REG_TO_PTGS reg
+	movl	\reg, PT_GS(%esp)
+.endm
+.macro SET_KERNEL_GS reg
+	movl	$(__KERNEL_STACK_CANARY), \reg
+	movl	\reg, %gs
+.endm
+
+#endif /* CONFIG_X86_32_LAZY_GS */
 
 /* Unconditionally switch to user cr3 */
 .macro SWITCH_TO_USER_CR3 scratch_reg:req
@@ -731,7 +779,7 @@ SYM_CODE_START(__switch_to_asm)
 
 #ifdef CONFIG_STACKPROTECTOR
 	movl	TASK_stack_canary(%edx), %ebx
-	movl	%ebx, PER_CPU_VAR(__stack_chk_guard)
+	movl	%ebx, PER_CPU_VAR(stack_canary)+stack_canary_offset
 #endif
 
 	/*
@@ -939,8 +987,6 @@ SYM_FUNC_START(entry_SYSENTER_32)
 
 	/* Now ready to switch the cr3 */
 	SWITCH_TO_USER_CR3 scratch_reg=%eax
-	/* Clobbers ZF */
-	CLEAR_CPU_BUFFERS
 
 	/*
 	 * Restore all flags except IF. (We restore IF separately because
@@ -1023,7 +1069,6 @@ restore_all_switch_stack:
 
 	/* Restore user state */
 	RESTORE_REGS pop=4			# skip orig_eax/error_code
-	CLEAR_CPU_BUFFERS
 .Lirq_return:
 	/*
 	 * ARCH_HAS_MEMBARRIER_SYNC_CORE rely on IRET core serialization
@@ -1242,7 +1287,6 @@ SYM_CODE_START(asm_exc_nmi)
 
 	CHECK_AND_APPLY_ESPFIX
 	RESTORE_ALL_NMI cr3_reg=%edi pop=4
-	CLEAR_CPU_BUFFERS
 	jmp	.Lirq_return
 
 #ifdef CONFIG_X86_ESPFIX32
@@ -1284,7 +1328,6 @@ SYM_CODE_START(asm_exc_nmi)
 	 *  1 - orig_ax
 	 */
 	lss	(1+5+6)*4(%esp), %esp			# back to espfix stack
-	CLEAR_CPU_BUFFERS
 	jmp	.Lirq_return
 #endif
 SYM_CODE_END(asm_exc_nmi)

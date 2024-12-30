@@ -459,9 +459,9 @@ int vmw_bo_cpu_blit(struct ttm_buffer_object *dst,
 	int ret = 0;
 
 	/* Buffer objects need to be either pinned or reserved: */
-	if (!(dst->pin_count))
+	if (!(dst->mem.placement & TTM_PL_FLAG_NO_EVICT))
 		dma_resv_assert_held(dst->base.resv);
-	if (!(src->pin_count))
+	if (!(src->mem.placement & TTM_PL_FLAG_NO_EVICT))
 		dma_resv_assert_held(src->base.resv);
 
 	if (!ttm_tt_is_populated(dst->ttm)) {

@@ -510,19 +510,17 @@ static void ncsi_suspend_channel(struct ncsi_dev_priv *ndp)
 
 		break;
 	case ncsi_dev_state_suspend_gls:
-		ndp->pending_req_num = 1;
+		ndp->pending_req_num = np->channel_num;
 
 		nca.type = NCSI_PKT_CMD_GLS;
 		nca.package = np->id;
-		nca.channel = ndp->channel_probe_id;
-		ret = ncsi_xmit_cmd(&nca);
-		if (ret)
-			goto error;
-		ndp->channel_probe_id++;
 
-		if (ndp->channel_probe_id == ndp->channel_count) {
-			ndp->channel_probe_id = 0;
-			nd->state = ncsi_dev_state_suspend_dcnt;
+		nd->state = ncsi_dev_state_suspend_dcnt;
+		NCSI_FOR_EACH_CHANNEL(np, nc) {
+			nca.channel = nc->id;
+			ret = ncsi_xmit_cmd(&nca);
+			if (ret)
+				goto error;
 		}
 
 		break;
@@ -691,30 +689,7 @@ static int set_one_vid(struct ncsi_dev_priv *ndp, struct ncsi_channel *nc,
 	return 0;
 }
 
-static int ncsi_oem_keep_phy_intel(struct ncsi_cmd_arg *nca)
-{
-	unsigned char data[NCSI_OEM_INTEL_CMD_KEEP_PHY_LEN];
-	int ret = 0;
-
-	nca->payload = NCSI_OEM_INTEL_CMD_KEEP_PHY_LEN;
-
-	memset(data, 0, NCSI_OEM_INTEL_CMD_KEEP_PHY_LEN);
-	*(unsigned int *)data = ntohl((__force __be32)NCSI_OEM_MFR_INTEL_ID);
-
-	data[4] = NCSI_OEM_INTEL_CMD_KEEP_PHY;
-
-	/* PHY Link up attribute */
-	data[6] = 0x1;
-
-	nca->data = data;
-
-	ret = ncsi_xmit_cmd(nca);
-	if (ret)
-		netdev_err(nca->ndp->ndev.dev,
-			   "NCSI: Failed to transmit cmd 0x%x during configure\n",
-			   nca->type);
-	return ret;
-}
+#if IS_ENABLED(CONFIG_NCSI_OEM_CMD_GET_MAC)
 
 /* NCSI OEM Command APIs */
 static int ncsi_oem_gma_handler_bcm(struct ncsi_cmd_arg *nca)
@@ -828,6 +803,8 @@ static int ncsi_gma_handler(struct ncsi_cmd_arg *nca, unsigned int mf_id)
 	/* Get Mac address from NCSI device */
 	return nch->handler(nca);
 }
+
+#endif /* CONFIG_NCSI_OEM_CMD_GET_MAC */
 
 /* Determine if a given channel from the channel_queue should be used for Tx */
 static bool ncsi_channel_is_tx(struct ncsi_dev_priv *ndp,
@@ -1010,18 +987,20 @@ static void ncsi_configure_channel(struct ncsi_dev_priv *ndp)
 			goto error;
 		}
 
-		nd->state = IS_ENABLED(CONFIG_NCSI_OEM_CMD_GET_MAC)
-			  ? ncsi_dev_state_config_oem_gma
-			  : ncsi_dev_state_config_clear_vids;
+		nd->state = ncsi_dev_state_config_oem_gma;
 		break;
 	case ncsi_dev_state_config_oem_gma:
 		nd->state = ncsi_dev_state_config_clear_vids;
+		ret = -1;
 
+#if IS_ENABLED(CONFIG_NCSI_OEM_CMD_GET_MAC)
 		nca.type = NCSI_PKT_CMD_OEM;
 		nca.package = np->id;
 		nca.channel = nc->id;
 		ndp->pending_req_num = 1;
 		ret = ncsi_gma_handler(&nca, nc->version.mf_id);
+#endif /* CONFIG_NCSI_OEM_CMD_GET_MAC */
+
 		if (ret < 0)
 			schedule_work(&ndp->work);
 
@@ -1319,6 +1298,7 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
 {
 	struct ncsi_dev *nd = &ndp->ndev;
 	struct ncsi_package *np;
+	struct ncsi_channel *nc;
 	struct ncsi_cmd_arg nca;
 	unsigned char index;
 	int ret;
@@ -1372,6 +1352,7 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
 
 		schedule_work(&ndp->work);
 		break;
+#if IS_ENABLED(CONFIG_NCSI_OEM_CMD_GET_MAC)
 	case ncsi_dev_state_probe_mlx_gma:
 		ndp->pending_req_num = 1;
 
@@ -1396,29 +1377,30 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
 
 		nd->state = ncsi_dev_state_probe_cis;
 		break;
-	case ncsi_dev_state_probe_keep_phy:
-		ndp->pending_req_num = 1;
+#endif /* CONFIG_NCSI_OEM_CMD_GET_MAC */
+	case ncsi_dev_state_probe_cis:
+		ndp->pending_req_num = NCSI_RESERVED_CHANNEL;
 
-		nca.type = NCSI_PKT_CMD_OEM;
+		/* Clear initial state */
+		nca.type = NCSI_PKT_CMD_CIS;
 		nca.package = ndp->active_package->id;
-		nca.channel = 0;
-		ret = ncsi_oem_keep_phy_intel(&nca);
-		if (ret)
-			goto error;
+		for (index = 0; index < NCSI_RESERVED_CHANNEL; index++) {
+			nca.channel = index;
+			ret = ncsi_xmit_cmd(&nca);
+			if (ret)
+				goto error;
+		}
 
 		nd->state = ncsi_dev_state_probe_gvi;
 		break;
-	case ncsi_dev_state_probe_cis:
 	case ncsi_dev_state_probe_gvi:
 	case ncsi_dev_state_probe_gc:
 	case ncsi_dev_state_probe_gls:
 		np = ndp->active_package;
-		ndp->pending_req_num = 1;
+		ndp->pending_req_num = np->channel_num;
 
-		/* Clear initial state Retrieve version, capability or link status */
-		if (nd->state == ncsi_dev_state_probe_cis)
-			nca.type = NCSI_PKT_CMD_CIS;
-		else if (nd->state == ncsi_dev_state_probe_gvi)
+		/* Retrieve version, capability or link status */
+		if (nd->state == ncsi_dev_state_probe_gvi)
 			nca.type = NCSI_PKT_CMD_GVI;
 		else if (nd->state == ncsi_dev_state_probe_gc)
 			nca.type = NCSI_PKT_CMD_GC;
@@ -1426,29 +1408,19 @@ static void ncsi_probe_channel(struct ncsi_dev_priv *ndp)
 			nca.type = NCSI_PKT_CMD_GLS;
 
 		nca.package = np->id;
-		nca.channel = ndp->channel_probe_id;
+		NCSI_FOR_EACH_CHANNEL(np, nc) {
+			nca.channel = nc->id;
+			ret = ncsi_xmit_cmd(&nca);
+			if (ret)
+				goto error;
+		}
 
-		ret = ncsi_xmit_cmd(&nca);
-		if (ret)
-			goto error;
-
-		if (nd->state == ncsi_dev_state_probe_cis) {
-			nd->state = ncsi_dev_state_probe_gvi;
-			if (IS_ENABLED(CONFIG_NCSI_OEM_CMD_KEEP_PHY) && ndp->channel_probe_id == 0)
-				nd->state = ncsi_dev_state_probe_keep_phy;
-		} else if (nd->state == ncsi_dev_state_probe_gvi) {
+		if (nd->state == ncsi_dev_state_probe_gvi)
 			nd->state = ncsi_dev_state_probe_gc;
-		} else if (nd->state == ncsi_dev_state_probe_gc) {
+		else if (nd->state == ncsi_dev_state_probe_gc)
 			nd->state = ncsi_dev_state_probe_gls;
-		} else {
-			nd->state = ncsi_dev_state_probe_cis;
-			ndp->channel_probe_id++;
-		}
-
-		if (ndp->channel_probe_id == ndp->channel_count) {
-			ndp->channel_probe_id = 0;
+		else
 			nd->state = ncsi_dev_state_probe_dp;
-		}
 		break;
 	case ncsi_dev_state_probe_dp:
 		ndp->pending_req_num = 1;
@@ -1749,7 +1721,6 @@ struct ncsi_dev *ncsi_register_dev(struct net_device *dev,
 		ndp->requests[i].ndp = ndp;
 		timer_setup(&ndp->requests[i].timer, ncsi_request_timeout, 0);
 	}
-	ndp->channel_count = NCSI_RESERVED_CHANNEL;
 
 	spin_lock_irqsave(&ncsi_dev_lock, flags);
 	list_add_tail_rcu(&ndp->node, &ncsi_dev_list);
@@ -1782,7 +1753,6 @@ int ncsi_start_dev(struct ncsi_dev *nd)
 
 	if (!(ndp->flags & NCSI_DEV_PROBED)) {
 		ndp->package_probe_id = 0;
-		ndp->channel_probe_id = 0;
 		nd->state = ncsi_dev_state_probe;
 		schedule_work(&ndp->work);
 		return 0;

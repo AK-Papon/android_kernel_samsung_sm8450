@@ -40,6 +40,10 @@
 #include <linux/init_task.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_FSCRYPT_SDP
+#include <linux/fscrypto_sdp_name.h>
+#endif
+
 #include "internal.h"
 #include "mount.h"
 
@@ -55,8 +59,8 @@
  * The new code replaces the old recursive symlink resolution with
  * an iterative one (in case of non-nested symlink chains).  It does
  * this with calls to <fs>_follow_link().
- * As a side effect, dir_namei(), _namei() and follow_link() are now 
- * replaced with a single function lookup_dentry() that can handle all 
+ * As a side effect, dir_namei(), _namei() and follow_link() are now
+ * replaced with a single function lookup_dentry() that can handle all
  * the special cases of the former code.
  *
  * With the new dcache, the pathname is stored at each inode, at least as
@@ -1205,13 +1209,21 @@ int follow_up(struct path *path)
 		read_sequnlock_excl(&mount_lock);
 		return 0;
 	}
+#ifdef CONFIG_KDP_NS
+	mntget(((struct kdp_mount *)parent)->mnt);
+#else
 	mntget(&parent->mnt);
+#endif
 	mountpoint = dget(mnt->mnt_mountpoint);
 	read_sequnlock_excl(&mount_lock);
 	dput(path->dentry);
 	path->dentry = mountpoint;
 	mntput(path->mnt);
+#ifdef CONFIG_KDP_NS
+	path->mnt = ((struct kdp_mount *)parent)->mnt;
+#else
 	path->mnt = &parent->mnt;
+#endif
 	return 1;
 }
 EXPORT_SYMBOL(follow_up);
@@ -1224,10 +1236,22 @@ static bool choose_mountpoint_rcu(struct mount *m, const struct path *root,
 
 		m = m->mnt_parent;
 		if (unlikely(root->dentry == mountpoint &&
+#ifdef CONFIG_KDP_NS
+			     root->mnt == ((struct kdp_mount *)m)->mnt))
+#else
 			     root->mnt == &m->mnt))
+#endif
 			break;
+#ifdef CONFIG_KDP_NS
+		if (mountpoint != ((struct kdp_mount *)m)->mnt->mnt_root) {
+#else
 		if (mountpoint != m->mnt.mnt_root) {
+#endif
+#ifdef CONFIG_KDP_NS
+			path->mnt = ((struct kdp_mount *)m)->mnt;
+#else
 			path->mnt = &m->mnt;
+#endif
 			path->dentry = mountpoint;
 			*seqp = read_seqcount_begin(&mountpoint->d_seq);
 			return true;
@@ -1430,8 +1454,13 @@ static bool __follow_mount_rcu(struct nameidata *nd, struct path *path,
 		if (flags & DCACHE_MOUNTED) {
 			struct mount *mounted = __lookup_mnt(path->mnt, dentry);
 			if (mounted) {
+#ifdef CONFIG_KDP_NS
+				path->mnt = ((struct kdp_mount *)mounted)->mnt;
+				dentry = path->dentry = ((struct kdp_mount *)mounted)->mnt->mnt_root;
+#else
 				path->mnt = &mounted->mnt;
 				dentry = path->dentry = mounted->mnt.mnt_root;
+#endif
 				nd->flags |= LOOKUP_JUMPED;
 				*seqp = read_seqcount_begin(&dentry->d_seq);
 				*inode = dentry->d_inode;
@@ -2855,14 +2884,20 @@ struct dentry *lock_rename(struct dentry *p1, struct dentry *p2)
 	p = d_ancestor(p2, p1);
 	if (p) {
 		inode_lock_nested(p2->d_inode, I_MUTEX_PARENT);
-		inode_lock_nested(p1->d_inode, I_MUTEX_PARENT2);
+		inode_lock_nested(p1->d_inode, I_MUTEX_CHILD);
 		return p;
 	}
 
 	p = d_ancestor(p1, p2);
-	inode_lock_nested(p1->d_inode, I_MUTEX_PARENT);
-	inode_lock_nested(p2->d_inode, I_MUTEX_PARENT2);
-	return p;
+	if (p) {
+		inode_lock_nested(p1->d_inode, I_MUTEX_PARENT);
+		inode_lock_nested(p2->d_inode, I_MUTEX_CHILD);
+		return p;
+	}
+
+	lock_two_inodes(p1->d_inode, p2->d_inode,
+			I_MUTEX_PARENT, I_MUTEX_PARENT2);
+	return NULL;
 }
 EXPORT_SYMBOL(lock_rename);
 
@@ -3722,6 +3757,9 @@ static long do_mknodat(int dfd, const char __user *filename, umode_t mode,
 	int error;
 	unsigned int lookup_flags = 0;
 
+	int debug = 0;
+	struct filename *fname = NULL;
+
 	error = may_mknod(mode);
 	if (error)
 		return error;
@@ -3730,6 +3768,20 @@ retry:
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
+	fname = getname(filename);
+
+	debug = fname && fname->name && !strncmp(fname->name, "/dev/remoteproc", strlen("/dev/remoteproc"));
+	
+	if (debug) {
+		pr_err("[%s] + %s %s\n", __func__, current->comm, fname->name);
+#if 0		
+		if (!strncmp(fname->name, "/dev/remoteproc4", strlen("/dev/remoteproc4"))) {
+			pr_err("[%s] skip mknod for %s\n", __func__, fname->name);
+			error = -EINVAL;
+			goto out;
+		}
+#endif
+	}
 	error = security_path_mknod(&path, dentry,
 			mode_strip_umask(path.dentry->d_inode, mode), dev);
 	if (error)
@@ -3754,6 +3806,10 @@ out:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
+
+	if (debug)
+		pr_err("[%s] - devnode : %s error : %d\n", __func__, fname?fname->name:"none", error);
+
 	return error;
 }
 
@@ -3849,6 +3905,12 @@ int vfs_rmdir(struct inode *dir, struct dentry *dentry)
 	if (error)
 		goto out;
 
+#ifdef CONFIG_FSCRYPT_SDP
+	error = fscrypt_sdp_check_rmdir(dentry);
+	if (error == -EIO)
+		goto out;
+#endif
+
 	error = dir->i_op->rmdir(dir, dentry);
 	if (error)
 		goto out;
@@ -3910,6 +3972,10 @@ retry:
 	if (error)
 		goto exit3;
 	error = vfs_rmdir(path.dentry->d_inode, dentry);
+#ifdef CONFIG_PROC_DLOG
+	if (!error)
+		dlog_hook_rmdir(dentry, &path);
+#endif
 exit3:
 	dput(dentry);
 exit2:
@@ -4034,6 +4100,10 @@ retry_deleg:
 		if (error)
 			goto exit2;
 		error = vfs_unlink(path.dentry->d_inode, dentry, &delegated_inode);
+#ifdef CONFIG_PROC_DLOG
+		if (!error)
+			dlog_hook(dentry, inode, &path);
+#endif
 exit2:
 		dput(dentry);
 	}
@@ -4338,12 +4408,11 @@ SYSCALL_DEFINE2(link, const char __user *, oldname, const char __user *, newname
  *
  *	a) we can get into loop creation.
  *	b) race potential - two innocent renames can create a loop together.
- *	   That's where 4.4BSD screws up. Current fix: serialization on
+ *	   That's where 4.4 screws up. Current fix: serialization on
  *	   sb->s_vfs_rename_mutex. We might be more accurate, but that's another
  *	   story.
- *	c) we may have to lock up to _four_ objects - parents and victim (if it exists),
- *	   and source (if it's a non-directory or a subdirectory that moves to
- *	   different parent).
+ *	c) we have to lock _four_ objects - parents and victim (if it exists),
+ *	   and source.
  *	   And that - after we got ->i_mutex on parents (until then we don't know
  *	   whether the target exists).  Solution: try to be smart with locking
  *	   order for inodes.  We rely on the fact that tree topology may change
@@ -4372,7 +4441,6 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	bool new_is_dir = false;
 	unsigned max_links = new_dir->i_sb->s_max_links;
 	struct name_snapshot old_name;
-	bool lock_old_subdir, lock_new_subdir;
 
 	if (source == target)
 		return 0;
@@ -4422,32 +4490,15 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	take_dentry_name_snapshot(&old_name, old_dentry);
 	dget(new_dentry);
 	/*
-	 * Lock children.
-	 * The source subdirectory needs to be locked on cross-directory
-	 * rename or cross-directory exchange since its parent changes.
-	 * The target subdirectory needs to be locked on cross-directory
-	 * exchange due to parent change and on any rename due to becoming
-	 * a victim.
-	 * Non-directories need locking in all cases (for NFS reasons);
-	 * they get locked after any subdirectories (in inode address order).
-	 *
-	 * NOTE: WE ONLY LOCK UNRELATED DIRECTORIES IN CROSS-DIRECTORY CASE.
-	 * NEVER, EVER DO THAT WITHOUT ->s_vfs_rename_mutex.
+	 * Lock all moved children. Moved directories may need to change parent
+	 * pointer so they need the lock to prevent against concurrent
+	 * directory changes moving parent pointer. For regular files we've
+	 * historically always done this. The lockdep locking subclasses are
+	 * somewhat arbitrary but RENAME_EXCHANGE in particular can swap
+	 * regular files and directories so it's difficult to tell which
+	 * subclasses to use.
 	 */
-	lock_old_subdir = new_dir != old_dir;
-	lock_new_subdir = new_dir != old_dir || !(flags & RENAME_EXCHANGE);
-	if (is_dir) {
-		if (lock_old_subdir)
-			inode_lock_nested(source, I_MUTEX_CHILD);
-		if (target && (!new_is_dir || lock_new_subdir))
-			inode_lock(target);
-	} else if (new_is_dir) {
-		if (lock_new_subdir)
-			inode_lock_nested(target, I_MUTEX_CHILD);
-		inode_lock(source);
-	} else {
-		lock_two_nondirectories(source, target);
-	}
+	lock_two_inodes(source, target, I_MUTEX_NORMAL, I_MUTEX_NONDIR2);
 
 	error = -EBUSY;
 	if (is_local_mountpoint(old_dentry) || is_local_mountpoint(new_dentry))
@@ -4471,10 +4522,19 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		if (error)
 			goto out;
 	}
+#ifdef CONFIG_FSCRYPT_SDP
+	error = fscrypt_sdp_check_rename_pre(old_dentry);
+	if (error == -EIO)
+		goto out;
+#endif
 	error = old_dir->i_op->rename(old_dir, old_dentry,
 				       new_dir, new_dentry, flags);
 	if (error)
 		goto out;
+#ifdef CONFIG_FSCRYPT_SDP
+	fscrypt_sdp_check_rename_post(old_dir, old_dentry,
+						new_dir, new_dentry);
+#endif
 
 	if (!(flags & RENAME_EXCHANGE) && target) {
 		if (is_dir) {
@@ -4491,9 +4551,8 @@ int vfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			d_exchange(old_dentry, new_dentry);
 	}
 out:
-	if (!is_dir || lock_old_subdir)
-		inode_unlock(source);
-	if (target && (!new_is_dir || lock_new_subdir))
+	inode_unlock(source);
+	if (target)
 		inode_unlock(target);
 	dput(new_dentry);
 	if (!error) {

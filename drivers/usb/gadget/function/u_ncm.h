@@ -33,9 +33,4 @@ struct f_ncm_opts {
 	int				refcnt;
 };
 
-struct ncm_vendor_opts {
-	struct f_ncm_opts		opts;
-	u16				max_segment_size;
-};
-
 #endif /* U_NCM_H */

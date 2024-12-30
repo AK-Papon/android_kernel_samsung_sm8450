@@ -1266,32 +1266,25 @@ static int open_fs_devices(struct btrfs_fs_devices *fs_devices,
 	struct btrfs_device *device;
 	struct btrfs_device *latest_dev = NULL;
 	struct btrfs_device *tmp_device;
-	int ret = 0;
 
 	flags |= FMODE_EXCL;
 
 	list_for_each_entry_safe(device, tmp_device, &fs_devices->devices,
 				 dev_list) {
-		int ret2;
+		int ret;
 
-		ret2 = btrfs_open_one_device(fs_devices, device, flags, holder);
-		if (ret2 == 0 &&
+		ret = btrfs_open_one_device(fs_devices, device, flags, holder);
+		if (ret == 0 &&
 		    (!latest_dev || device->generation > latest_dev->generation)) {
 			latest_dev = device;
-		} else if (ret2 == -ENODATA) {
+		} else if (ret == -ENODATA) {
 			fs_devices->num_devices--;
 			list_del(&device->dev_list);
 			btrfs_free_device(device);
 		}
-		if (ret == 0 && ret2 != 0)
-			ret = ret2;
 	}
-
-	if (fs_devices->open_devices == 0) {
-		if (ret)
-			return ret;
+	if (fs_devices->open_devices == 0)
 		return -EINVAL;
-	}
 
 	fs_devices->opened = 1;
 	fs_devices->latest_bdev = latest_dev->bdev;
@@ -1477,7 +1470,7 @@ static bool contains_pending_extent(struct btrfs_device *device, u64 *start,
 
 		if (in_range(physical_start, *start, len) ||
 		    in_range(*start, physical_start,
-			     physical_end + 1 - physical_start)) {
+			     physical_end - physical_start)) {
 			*start = physical_end + 1;
 			return true;
 		}
@@ -3184,18 +3177,7 @@ again:
 			mutex_unlock(&fs_info->delete_unused_bgs_mutex);
 			goto error;
 		}
-		if (ret == 0) {
-			/*
-			 * On the first search we would find chunk tree with
-			 * offset -1, which is not possible. On subsequent
-			 * loops this would find an existing item on an invalid
-			 * offset (one less than the previous one, wrong
-			 * alignment and size).
-			 */
-			ret = -EUCLEAN;
-			mutex_unlock(&fs_info->delete_unused_bgs_mutex);
-			goto error;
-		}
+		BUG_ON(ret == 0); /* Corruption */
 
 		ret = btrfs_previous_item(chunk_root, path, key.objectid,
 					  key.type);

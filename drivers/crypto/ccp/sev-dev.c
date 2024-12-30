@@ -304,16 +304,10 @@ EXPORT_SYMBOL_GPL(sev_platform_init);
 
 static int __sev_platform_shutdown_locked(int *error)
 {
-	struct psp_device *psp = psp_master;
-	struct sev_device *sev;
+	struct sev_device *sev = psp_master->sev_data;
 	int ret;
 
-	if (!psp || !psp->sev_data)
-		return 0;
-
-	sev = psp->sev_data;
-
-	if (sev->state == SEV_STATE_UNINIT)
+	if (!sev || sev->state == SEV_STATE_UNINIT)
 		return 0;
 
 	ret = __sev_do_cmd_locked(SEV_CMD_SHUTDOWN, NULL, error);
@@ -1129,8 +1123,6 @@ void sev_pci_init(void)
 	return;
 
 err:
-	sev_dev_destroy(psp_master);
-
 	psp_master->sev_data = NULL;
 }
 

@@ -135,10 +135,12 @@ static void noinstr el1_pc(struct pt_regs *regs, unsigned long esr)
 	exit_to_kernel_mode(regs);
 }
 
-static void noinstr el1_undef(struct pt_regs *regs)
+static void noinstr el1_undef(struct pt_regs *regs, unsigned long esr)
 {
 	enter_from_kernel_mode(regs);
 	local_daif_inherit(regs);
+	if (!user_mode(regs))
+		pr_err("[%s] esr : 0x%lx\n", __func__, esr); 
 	do_undefinstr(regs);
 	local_daif_mask();
 	exit_to_kernel_mode(regs);
@@ -213,7 +215,7 @@ asmlinkage void noinstr el1_sync_handler(struct pt_regs *regs)
 		break;
 	case ESR_ELx_EC_SYS64:
 	case ESR_ELx_EC_UNKNOWN:
-		el1_undef(regs);
+		el1_undef(regs, esr); 
 		break;
 	case ESR_ELx_EC_BREAKPT_CUR:
 	case ESR_ELx_EC_SOFTSTP_CUR:

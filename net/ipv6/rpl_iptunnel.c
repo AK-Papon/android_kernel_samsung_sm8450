@@ -217,9 +217,9 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	if (unlikely(err))
 		goto drop;
 
-	local_bh_disable();
+	preempt_disable();
 	dst = dst_cache_get(&rlwt->cache);
-	local_bh_enable();
+	preempt_enable();
 
 	if (unlikely(!dst)) {
 		struct ipv6hdr *hdr = ipv6_hdr(skb);
@@ -239,9 +239,9 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			goto drop;
 		}
 
-		local_bh_disable();
+		preempt_disable();
 		dst_cache_set_ip6(&rlwt->cache, dst, &fl6.saddr);
-		local_bh_enable();
+		preempt_enable();
 	}
 
 	skb_dst_drop(skb);
@@ -268,11 +268,14 @@ static int rpl_input(struct sk_buff *skb)
 	rlwt = rpl_lwt_lwtunnel(orig_dst->lwtstate);
 
 	err = rpl_do_srh(skb, rlwt);
-	if (unlikely(err))
-		goto drop;
+	if (unlikely(err)) {
+		kfree_skb(skb);
+		return err;
+	}
 
-	local_bh_disable();
+	preempt_disable();
 	dst = dst_cache_get(&rlwt->cache);
+	preempt_enable();
 
 	skb_dst_drop(skb);
 
@@ -280,23 +283,20 @@ static int rpl_input(struct sk_buff *skb)
 		ip6_route_input(skb);
 		dst = skb_dst(skb);
 		if (!dst->error) {
+			preempt_disable();
 			dst_cache_set_ip6(&rlwt->cache, dst,
 					  &ipv6_hdr(skb)->saddr);
+			preempt_enable();
 		}
 	} else {
 		skb_dst_set(skb, dst);
 	}
-	local_bh_enable();
 
 	err = skb_cow_head(skb, LL_RESERVED_SPACE(dst->dev));
 	if (unlikely(err))
-		goto drop;
+		return err;
 
 	return dst_input(skb);
-
-drop:
-	kfree_skb(skb);
-	return err;
 }
 
 static int nla_put_rpl_srh(struct sk_buff *skb, int attrtype,

@@ -591,7 +591,6 @@ static char *rnbd_srv_get_full_path(struct rnbd_srv_session *srv_sess,
 {
 	char *full_path;
 	char *a, *b;
-	int len;
 
 	full_path = kmalloc(PATH_MAX, GFP_KERNEL);
 	if (!full_path)
@@ -603,19 +602,19 @@ static char *rnbd_srv_get_full_path(struct rnbd_srv_session *srv_sess,
 	 */
 	a = strnstr(dev_search_path, "%SESSNAME%", sizeof(dev_search_path));
 	if (a) {
-		len = a - dev_search_path;
+		int len = a - dev_search_path;
 
 		len = snprintf(full_path, PATH_MAX, "%.*s/%s/%s", len,
 			       dev_search_path, srv_sess->sessname, dev_name);
+		if (len >= PATH_MAX) {
+			pr_err("Too long path: %s, %s, %s\n",
+			       dev_search_path, srv_sess->sessname, dev_name);
+			kfree(full_path);
+			return ERR_PTR(-EINVAL);
+		}
 	} else {
-		len = snprintf(full_path, PATH_MAX, "%s/%s",
-			       dev_search_path, dev_name);
-	}
-	if (len >= PATH_MAX) {
-		pr_err("Too long path: %s, %s, %s\n",
-		       dev_search_path, srv_sess->sessname, dev_name);
-		kfree(full_path);
-		return ERR_PTR(-EINVAL);
+		snprintf(full_path, PATH_MAX, "%s/%s",
+			 dev_search_path, dev_name);
 	}
 
 	/* eliminitate duplicated slashes */

@@ -28,7 +28,13 @@ config MMU
 	default y
 
 config NO_IOMEM
-	def_bool y
+	bool
+	default y if !KUNIT
+
+config HAS_IOMEM
+	bool "Turns on fake IOMEM support for KUnit"
+	depends on KUNIT
+	select MOCK_IOMEM
 
 config ISA
 	bool
@@ -91,19 +97,6 @@ config LD_SCRIPT_DYN
 	default y
 	depends on !LD_SCRIPT_STATIC
 	select MODULE_REL_CRCS if MODVERSIONS
-
-config LD_SCRIPT_DYN_RPATH
-	bool "set rpath in the binary" if EXPERT
-	default y
-	depends on LD_SCRIPT_DYN
-	help
-	  Add /lib (and /lib64 for 64-bit) to the linux binary's rpath
-	  explicitly.
-
-	  You may need to turn this off if compiling for nix systems
-	  that have their libraries in random /nix directories and
-	  might otherwise unexpected use libraries from /lib or /lib64
-	  instead of the desired ones.
 
 config HOSTFS
 	tristate "Host filesystem"
@@ -202,6 +195,11 @@ config UML_TIME_TRAVEL_SUPPORT
 	  line help for more details.
 
 	  It is safe to say Y, but you probably don't need this.
+
+config PLATFORM_MOCK
+	bool "Enable a mock architecture used for unit testing."
+	depends on KUNIT && OF
+	default n
 
 endmenu
 

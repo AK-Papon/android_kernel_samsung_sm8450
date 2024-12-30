@@ -39,7 +39,6 @@
 #include <linux/slab.h>
 #include <linux/ctype.h>
 #include <linux/init.h>
-#include <linux/kmemleak.h>
 #include <linux/poll.h>
 #include <linux/nmi.h>
 #include <linux/fs.h>
@@ -984,6 +983,7 @@ void tracing_on(void)
 {
 	tracer_tracing_on(&global_trace);
 }
+EXPORT_SYMBOL_GPL(tracing_on);
 
 
 static __always_inline void
@@ -2240,13 +2240,9 @@ struct saved_cmdlines_buffer {
 	unsigned *map_cmdline_to_pid;
 	unsigned cmdline_num;
 	int cmdline_idx;
-	char saved_cmdlines[];
+	char *saved_cmdlines;
 };
 static struct saved_cmdlines_buffer *savedcmd;
-
-/* Holds the size of a cmdline and pid element */
-#define SAVED_CMDLINE_MAP_ELEMENT_SIZE(s)			\
-	(TASK_COMM_LEN + sizeof((s)->map_cmdline_to_pid[0]))
 
 static inline char *get_saved_cmdlines(int idx)
 {
@@ -2258,54 +2254,47 @@ static inline void set_cmdline(int idx, const char *cmdline)
 	strncpy(get_saved_cmdlines(idx), cmdline, TASK_COMM_LEN);
 }
 
-static void free_saved_cmdlines_buffer(struct saved_cmdlines_buffer *s)
+static int allocate_cmdlines_buffer(unsigned int val,
+				    struct saved_cmdlines_buffer *s)
 {
-	int order = get_order(sizeof(*s) + s->cmdline_num * TASK_COMM_LEN);
+	s->map_cmdline_to_pid = kmalloc_array(val,
+					      sizeof(*s->map_cmdline_to_pid),
+					      GFP_KERNEL);
+	if (!s->map_cmdline_to_pid)
+		return -ENOMEM;
 
-	kmemleak_free(s);
-	free_pages((unsigned long)s, order);
-}
-
-static struct saved_cmdlines_buffer *allocate_cmdlines_buffer(unsigned int val)
-{
-	struct saved_cmdlines_buffer *s;
-	struct page *page;
-	int orig_size, size;
-	int order;
-
-	/* Figure out how much is needed to hold the given number of cmdlines */
-	orig_size = sizeof(*s) + val * SAVED_CMDLINE_MAP_ELEMENT_SIZE(s);
-	order = get_order(orig_size);
-	size = 1 << (order + PAGE_SHIFT);
-	page = alloc_pages(GFP_KERNEL, order);
-	if (!page)
-		return NULL;
-
-	s = page_address(page);
-	kmemleak_alloc(s, size, 1, GFP_KERNEL);
-	memset(s, 0, sizeof(*s));
-
-	/* Round up to actual allocation */
-	val = (size - sizeof(*s)) / SAVED_CMDLINE_MAP_ELEMENT_SIZE(s);
-	s->cmdline_num = val;
-
-	/* Place map_cmdline_to_pid array right after saved_cmdlines */
-	s->map_cmdline_to_pid = (unsigned *)&s->saved_cmdlines[val * TASK_COMM_LEN];
+	s->saved_cmdlines = kmalloc_array(TASK_COMM_LEN, val, GFP_KERNEL);
+	if (!s->saved_cmdlines) {
+		kfree(s->map_cmdline_to_pid);
+		return -ENOMEM;
+	}
 
 	s->cmdline_idx = 0;
+	s->cmdline_num = val;
 	memset(&s->map_pid_to_cmdline, NO_CMDLINE_MAP,
 	       sizeof(s->map_pid_to_cmdline));
 	memset(s->map_cmdline_to_pid, NO_CMDLINE_MAP,
 	       val * sizeof(*s->map_cmdline_to_pid));
 
-	return s;
+	return 0;
 }
 
 static int trace_create_savedcmd(void)
 {
-	savedcmd = allocate_cmdlines_buffer(SAVED_CMDLINES_DEFAULT);
+	int ret;
 
-	return savedcmd ? 0 : -ENOMEM;
+	savedcmd = kmalloc(sizeof(*savedcmd), GFP_KERNEL);
+	if (!savedcmd)
+		return -ENOMEM;
+
+	ret = allocate_cmdlines_buffer(SAVED_CMDLINES_DEFAULT, savedcmd);
+	if (ret < 0) {
+		kfree(savedcmd);
+		savedcmd = NULL;
+		return -ENOMEM;
+	}
+
+	return 0;
 }
 
 int is_tracing_stopped(void)
@@ -3684,8 +3673,6 @@ void tracing_iter_reset(struct trace_iterator *iter, int cpu)
 			break;
 		entries++;
 		ring_buffer_iter_advance(buf_iter);
-		/* This could be a big loop */
-		cond_resched();
 	}
 
 	per_cpu_ptr(iter->array_buffer->data, cpu)->skipped_entries = entries;
@@ -5535,13 +5522,25 @@ tracing_saved_cmdlines_size_read(struct file *filp, char __user *ubuf,
 	return simple_read_from_buffer(ubuf, cnt, ppos, buf, r);
 }
 
+static void free_saved_cmdlines_buffer(struct saved_cmdlines_buffer *s)
+{
+	kfree(s->saved_cmdlines);
+	kfree(s->map_cmdline_to_pid);
+	kfree(s);
+}
+
 static int tracing_resize_saved_cmdlines(unsigned int val)
 {
 	struct saved_cmdlines_buffer *s, *savedcmd_temp;
 
-	s = allocate_cmdlines_buffer(val);
+	s = kmalloc(sizeof(*s), GFP_KERNEL);
 	if (!s)
 		return -ENOMEM;
+
+	if (allocate_cmdlines_buffer(val, s) < 0) {
+		kfree(s);
+		return -ENOMEM;
+	}
 
 	preempt_disable();
 	arch_spin_lock(&trace_cmdline_lock);

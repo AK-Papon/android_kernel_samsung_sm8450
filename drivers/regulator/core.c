@@ -1749,24 +1749,19 @@ static struct regulator *create_regulator(struct regulator_dev *rdev,
 		}
 	}
 
-	if (err != -EEXIST) {
+	if (err != -EEXIST)
 		regulator->debugfs = debugfs_create_dir(supply_name, rdev->debugfs);
-		if (IS_ERR(regulator->debugfs)) {
-			rdev_dbg(rdev, "Failed to create debugfs directory\n");
-			regulator->debugfs = NULL;
-		}
-	}
+	if (IS_ERR(regulator->debugfs))
+		rdev_dbg(rdev, "Failed to create debugfs directory\n");
 
-	if (regulator->debugfs) {
-		debugfs_create_u32("uA_load", 0444, regulator->debugfs,
-				   &regulator->uA_load);
-		debugfs_create_u32("min_uV", 0444, regulator->debugfs,
-				   &regulator->voltage[PM_SUSPEND_ON].min_uV);
-		debugfs_create_u32("max_uV", 0444, regulator->debugfs,
-				   &regulator->voltage[PM_SUSPEND_ON].max_uV);
-		debugfs_create_file("constraint_flags", 0444, regulator->debugfs,
-				    regulator, &constraint_flags_fops);
-	}
+	debugfs_create_u32("uA_load", 0444, regulator->debugfs,
+			   &regulator->uA_load);
+	debugfs_create_u32("min_uV", 0444, regulator->debugfs,
+			   &regulator->voltage[PM_SUSPEND_ON].min_uV);
+	debugfs_create_u32("max_uV", 0444, regulator->debugfs,
+			   &regulator->voltage[PM_SUSPEND_ON].max_uV);
+	debugfs_create_file("constraint_flags", 0444, regulator->debugfs,
+			    regulator, &constraint_flags_fops);
 
 	/*
 	 * Check now if the regulator is an always on regulator - if
@@ -2773,8 +2768,7 @@ static int _regulator_enable(struct regulator *regulator)
 		/* Fallthrough on positive return values - already enabled */
 	}
 
-	if (regulator->enable_count == 1)
-		rdev->use_count++;
+	rdev->use_count++;
 
 	return 0;
 
@@ -2852,40 +2846,37 @@ static int _regulator_disable(struct regulator *regulator)
 
 	lockdep_assert_held_once(&rdev->mutex.base);
 
-	if (WARN(regulator->enable_count == 0,
+	if (WARN(rdev->use_count <= 0,
 		 "unbalanced disables for %s\n", rdev_get_name(rdev)))
 		return -EIO;
 
-	if (regulator->enable_count == 1) {
-	/* disabling last enable_count from this regulator */
-		/* are we the last user and permitted to disable ? */
-		if (rdev->use_count == 1 &&
-		    (rdev->constraints && !rdev->constraints->always_on)) {
+	/* are we the last user and permitted to disable ? */
+	if (rdev->use_count == 1 &&
+	    (rdev->constraints && !rdev->constraints->always_on)) {
 
-			/* we are last user */
-			if (regulator_ops_is_valid(rdev, REGULATOR_CHANGE_STATUS)) {
-				ret = _notifier_call_chain(rdev,
-							   REGULATOR_EVENT_PRE_DISABLE,
-							   NULL);
-				if (ret & NOTIFY_STOP_MASK)
-					return -EINVAL;
+		/* we are last user */
+		if (regulator_ops_is_valid(rdev, REGULATOR_CHANGE_STATUS)) {
+			ret = _notifier_call_chain(rdev,
+						   REGULATOR_EVENT_PRE_DISABLE,
+						   NULL);
+			if (ret & NOTIFY_STOP_MASK)
+				return -EINVAL;
 
-				ret = _regulator_do_disable(rdev);
-				if (ret < 0) {
-					rdev_err(rdev, "failed to disable: %pe\n", ERR_PTR(ret));
-					_notifier_call_chain(rdev,
-							REGULATOR_EVENT_ABORT_DISABLE,
-							NULL);
-					return ret;
-				}
-				_notifier_call_chain(rdev, REGULATOR_EVENT_DISABLE,
+			ret = _regulator_do_disable(rdev);
+			if (ret < 0) {
+				rdev_err(rdev, "failed to disable: %pe\n", ERR_PTR(ret));
+				_notifier_call_chain(rdev,
+						REGULATOR_EVENT_ABORT_DISABLE,
 						NULL);
+				return ret;
 			}
-
-			rdev->use_count = 0;
-		} else if (rdev->use_count > 1) {
-			rdev->use_count--;
+			_notifier_call_chain(rdev, REGULATOR_EVENT_DISABLE,
+					NULL);
 		}
+
+		rdev->use_count = 0;
+	} else if (rdev->use_count > 1) {
+		rdev->use_count--;
 	}
 
 	if (ret == 0)
@@ -3185,7 +3176,6 @@ struct regmap *regulator_get_regmap(struct regulator *regulator)
 
 	return map ? map : ERR_PTR(-EOPNOTSUPP);
 }
-EXPORT_SYMBOL_GPL(regulator_get_regmap);
 
 /**
  * regulator_get_hardware_vsel_register - get the HW voltage selector register
@@ -5537,6 +5527,87 @@ void regulator_unregister(struct regulator_dev *rdev)
 }
 EXPORT_SYMBOL_GPL(regulator_unregister);
 
+struct rdev_check_data {
+	struct regulator_dev *parent;
+	int level;
+};
+
+static void regulator_show_enabled_subtree(struct regulator_dev *rdev,
+					int level);
+
+static int regulator_show_enabled_children(struct device *dev, void *data)
+{
+	struct regulator_dev *rdev = dev_to_rdev(dev);
+	struct rdev_check_data *check_data = data;
+
+	if (rdev->supply && rdev->supply->rdev == check_data->parent)
+		regulator_show_enabled_subtree(rdev, check_data->level + 1);
+
+	return 0;
+}
+
+static void regulator_show_enabled_subtree(struct regulator_dev *rdev,
+					int level)
+{
+	struct regulation_constraints *c;
+	struct rdev_check_data check_data;
+
+	if (!rdev)
+		return;
+
+	if (rdev->use_count <= 0)
+		goto out;
+
+	if (rdev->constraints->always_on &&
+			rdev->constraints->initial_mode == 1)
+		goto out;
+
+	pr_cont("%*s%-*s %3d %4d %9d",
+		   level * 3 + 1, "",
+		   30 - level * 3, rdev_get_name(rdev),
+		   rdev->use_count, rdev->constraints->initial_mode,
+		   rdev->constraints->always_on);
+
+	c = rdev->constraints;
+	if (c) {
+		switch (rdev->desc->type) {
+		case REGULATOR_VOLTAGE:
+			pr_cont("%5dmV %5dmV\n",
+				   c->min_uV / 1000, c->max_uV / 1000);
+			break;
+		case REGULATOR_CURRENT:
+			pr_cont("%5dmA %5dmA\n",
+				   c->min_uA / 1000, c->max_uA / 1000);
+			break;
+		}
+	}
+out:
+	check_data.level = level;
+	check_data.parent = rdev;
+
+	class_for_each_device(&regulator_class, NULL, &check_data,
+			      regulator_show_enabled_children);
+}
+
+static int _regulator_show_enabled(struct device *dev, void *data)
+{
+	struct regulator_dev *rdev = dev_to_rdev(dev);
+
+	if (!rdev->supply)
+		regulator_show_enabled_subtree(rdev, 0);
+
+	return 0;
+}
+
+int regulator_show_enabled(void)
+{
+	pr_info(" regulator                      use mode always-on     min     max\n");
+	pr_info("------------------------------------------------------------------\n");
+
+	return class_for_each_device(&regulator_class, NULL, NULL,
+				     _regulator_show_enabled);
+}
+
 #ifdef CONFIG_SUSPEND
 /**
  * regulator_suspend - prepare regulators for system wide suspend
@@ -6049,7 +6120,7 @@ static int __init regulator_init_complete(void)
 	 * command line option might be useful.
 	 */
 	schedule_delayed_work(&regulator_init_complete_work,
-			      msecs_to_jiffies(30000));
+			      msecs_to_jiffies(90000));
 
 	return 0;
 }

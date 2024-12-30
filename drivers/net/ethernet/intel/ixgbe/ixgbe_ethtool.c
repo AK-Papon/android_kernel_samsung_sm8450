@@ -3346,7 +3346,7 @@ static int ixgbe_get_module_eeprom(struct net_device *dev,
 {
 	struct ixgbe_adapter *adapter = netdev_priv(dev);
 	struct ixgbe_hw *hw = &adapter->hw;
-	s32 status = -EFAULT;
+	s32 status = IXGBE_ERR_PHY_ADDR_INVALID;
 	u8 databyte = 0xFF;
 	int i = 0;
 

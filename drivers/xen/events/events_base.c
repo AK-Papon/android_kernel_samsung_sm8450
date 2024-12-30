@@ -885,8 +885,8 @@ static void shutdown_pirq(struct irq_data *data)
 		return;
 
 	do_mask(info, EVT_MASK_REASON_EXPLICIT);
-	xen_irq_info_cleanup(info);
 	xen_evtchn_close(evtchn);
+	xen_irq_info_cleanup(info);
 }
 
 static void enable_pirq(struct irq_data *data)
@@ -929,6 +929,8 @@ static void __unbind_from_irq(unsigned int irq)
 	if (VALID_EVTCHN(evtchn)) {
 		unsigned int cpu = cpu_from_irq(irq);
 
+		xen_evtchn_close(evtchn);
+
 		switch (type_from_irq(irq)) {
 		case IRQT_VIRQ:
 			per_cpu(virq_to_irq, cpu)[virq_from_irq(irq)] = -1;
@@ -941,7 +943,6 @@ static void __unbind_from_irq(unsigned int irq)
 		}
 
 		xen_irq_info_cleanup(info);
-		xen_evtchn_close(evtchn);
 	}
 
 	xen_free_irq(irq);

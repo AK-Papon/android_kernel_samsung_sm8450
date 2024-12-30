@@ -454,7 +454,7 @@ static struct tracing_map_elt *get_free_elt(struct tracing_map *map)
 	struct tracing_map_elt *elt = NULL;
 	int idx;
 
-	idx = atomic_fetch_add_unless(&map->next_elt, 1, map->max_elts);
+	idx = atomic_inc_return(&map->next_elt);
 	if (idx < map->max_elts) {
 		elt = *(TRACING_MAP_ELT(map->elts, idx));
 		if (map->ops && map->ops->elt_init)
@@ -574,12 +574,7 @@ __tracing_map_insert(struct tracing_map *map, void *key, bool lookup_only)
 				}
 
 				memcpy(elt->key, key, map->key_size);
-				/*
-				 * Ensure the initialization is visible and
-				 * publish the elt.
-				 */
-				smp_wmb();
-				WRITE_ONCE(entry->val, elt);
+				entry->val = elt;
 				atomic64_inc(&map->hits);
 
 				return entry->val;
@@ -699,7 +694,7 @@ void tracing_map_clear(struct tracing_map *map)
 {
 	unsigned int i;
 
-	atomic_set(&map->next_elt, 0);
+	atomic_set(&map->next_elt, -1);
 	atomic64_set(&map->hits, 0);
 	atomic64_set(&map->drops, 0);
 
@@ -783,7 +778,7 @@ struct tracing_map *tracing_map_create(unsigned int map_bits,
 
 	map->map_bits = map_bits;
 	map->max_elts = (1 << map_bits);
-	atomic_set(&map->next_elt, 0);
+	atomic_set(&map->next_elt, -1);
 
 	map->map_size = (1 << (map_bits + 1));
 	map->ops = ops;

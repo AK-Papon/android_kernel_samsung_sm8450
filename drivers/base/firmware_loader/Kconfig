@@ -181,5 +181,11 @@ config FW_CACHE
 
 	  If unsure, say Y.
 
+
+config SUPPORT_SSC_SPU
+	bool "Support SSC(SLPI) SPU(System Parameter update)"
+	help
+	  Add support for SSC SPU.
+
 endif # FW_LOADER
 endmenu

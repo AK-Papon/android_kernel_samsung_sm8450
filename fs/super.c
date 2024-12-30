@@ -40,6 +40,9 @@
 #include <uapi/linux/mount.h>
 #include "internal.h"
 
+/* @fs.sec -- 89e449513e5bea6196d9aaf62a6936ae -- */
+void (*ufs_debug_func)(void *) = NULL;
+
 static int thaw_super_locked(struct super_block *sb);
 
 static LIST_HEAD(super_blocks);
@@ -476,8 +479,6 @@ void generic_shutdown_super(struct super_block *sb)
 	spin_unlock(&sb_lock);
 	up_write(&sb->s_umount);
 	if (sb->s_bdi != &noop_backing_dev_info) {
-		if (sb->s_iflags & SB_I_PERSB_BDI)
-			bdi_unregister(sb->s_bdi);
 		bdi_put(sb->s_bdi);
 		sb->s_bdi = &noop_backing_dev_info;
 	}
@@ -519,17 +520,6 @@ struct super_block *sget_fc(struct fs_context *fc,
 	struct super_block *old;
 	struct user_namespace *user_ns = fc->global ? &init_user_ns : fc->user_ns;
 	int err;
-
-	/*
-	 * Never allow s_user_ns != &init_user_ns when FS_USERNS_MOUNT is
-	 * not set, as the filesystem is likely unprepared to handle it.
-	 * This can happen when fsconfig() is called from init_user_ns with
-	 * an fs_fd opened in another user namespace.
-	 */
-	if (user_ns != &init_user_ns && !(fc->fs_type->fs_flags & FS_USERNS_MOUNT)) {
-		errorfc(fc, "VFS: Mounting from non-initial user namespace is not allowed");
-		return ERR_PTR(-EPERM);
-	}
 
 retry:
 	spin_lock(&sb_lock);
@@ -987,8 +977,14 @@ int reconfigure_super(struct fs_context *fc)
 		}
 	}
 
+#ifdef CONFIG_FIVE
+	WRITE_ONCE(sb->s_flags, ((sb->s_flags & ~fc->sb_flags_mask) |
+				 (fc->sb_flags & fc->sb_flags_mask) |
+				 MS_I_VERSION));
+#else
 	WRITE_ONCE(sb->s_flags, ((sb->s_flags & ~fc->sb_flags_mask) |
 				 (fc->sb_flags & fc->sb_flags_mask)));
+#endif
 	/* Needs to be ordered wrt mnt_is_readonly() */
 	smp_wmb();
 	sb->s_readonly_remount = 0;
@@ -1613,34 +1609,61 @@ int vfs_get_tree(struct fs_context *fc)
 }
 EXPORT_SYMBOL(vfs_get_tree);
 
-/*
- * Setup private BDI for given superblock. It gets automatically cleaned up
- * in generic_shutdown_super().
- */
-int super_setup_bdi_name(struct super_block *sb, char *fmt, ...)
+static int __super_setup_bdi_name(struct super_block *sb,
+		struct backing_dev_info *(*bdi_alloc_func)(int),
+		char *fmt, va_list args)
 {
 	struct backing_dev_info *bdi;
 	int err;
-	va_list args;
 
-	bdi = bdi_alloc(NUMA_NO_NODE);
+	bdi = bdi_alloc_func(NUMA_NO_NODE);
 	if (!bdi)
 		return -ENOMEM;
 
-	va_start(args, fmt);
 	err = bdi_register_va(bdi, fmt, args);
-	va_end(args);
 	if (err) {
 		bdi_put(bdi);
 		return err;
 	}
 	WARN_ON(sb->s_bdi != &noop_backing_dev_info);
 	sb->s_bdi = bdi;
-	sb->s_iflags |= SB_I_PERSB_BDI;
 
 	return 0;
 }
+
+/*
+ * Setup private BDI for given superblock. It gets automatically cleaned up
+ * in generic_shutdown_super().
+ */
+int super_setup_bdi_name(struct super_block *sb, char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret =  __super_setup_bdi_name(sb, bdi_alloc, fmt, args);
+	va_end(args);
+
+	return ret;
+}
 EXPORT_SYMBOL(super_setup_bdi_name);
+
+/*
+ * Setup private SEC_BDI for given superblock. It gets automatically cleaned up
+ * in generic_shutdown_super().
+ */
+int sec_super_setup_bdi_name(struct super_block *sb, char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret =  __super_setup_bdi_name(sb, sec_bdi_alloc, fmt, args);
+	va_end(args);
+
+	return ret;
+}
+EXPORT_SYMBOL(sec_super_setup_bdi_name);
 
 /*
  * Setup private BDI for given superblock. I gets automatically cleaned up

@@ -1575,35 +1575,46 @@ static int cpufreq_add_dev(struct device *dev, struct subsys_interface *sif)
 	return 0;
 }
 
-static void __cpufreq_offline(unsigned int cpu, struct cpufreq_policy *policy)
+static int cpufreq_offline(unsigned int cpu)
 {
+	struct cpufreq_policy *policy;
 	int ret;
 
+	pr_debug("%s: unregistering CPU %u\n", __func__, cpu);
+
+	policy = cpufreq_cpu_get_raw(cpu);
+	if (!policy) {
+		pr_debug("%s: No cpu_data found\n", __func__);
+		return 0;
+	}
+
+	down_write(&policy->rwsem);
 	if (has_target())
 		cpufreq_stop_governor(policy);
 
 	cpumask_clear_cpu(cpu, policy->cpus);
 
-	if (!policy_is_inactive(policy)) {
-		/* Nominate a new CPU if necessary. */
-		if (cpu == policy->cpu)
-			policy->cpu = cpumask_any(policy->cpus);
+	if (policy_is_inactive(policy)) {
+		if (has_target())
+			strncpy(policy->last_governor, policy->governor->name,
+				CPUFREQ_NAME_LEN);
+		else
+			policy->last_policy = policy->policy;
+	} else if (cpu == policy->cpu) {
+		/* Nominate new CPU */
+		policy->cpu = cpumask_any(policy->cpus);
+	}
 
-		/* Start the governor again for the active policy. */
+	/* Start governor again for active policy */
+	if (!policy_is_inactive(policy)) {
 		if (has_target()) {
 			ret = cpufreq_start_governor(policy);
 			if (ret)
 				pr_err("%s: Failed to start governor\n", __func__);
 		}
 
-		return;
+		goto unlock;
 	}
-
-	if (has_target())
-		strncpy(policy->last_governor, policy->governor->name,
-			CPUFREQ_NAME_LEN);
-	else
-		policy->last_policy = policy->policy;
 
 	if (cpufreq_thermal_control_enabled(cpufreq_driver)) {
 		cpufreq_cooling_unregister(policy->cdev);
@@ -1622,31 +1633,12 @@ static void __cpufreq_offline(unsigned int cpu, struct cpufreq_policy *policy)
 	 */
 	if (cpufreq_driver->offline) {
 		cpufreq_driver->offline(policy);
-		return;
-	}
-
-	if (cpufreq_driver->exit)
+	} else if (cpufreq_driver->exit) {
 		cpufreq_driver->exit(policy);
-
-	policy->freq_table = NULL;
-}
-
-static int cpufreq_offline(unsigned int cpu)
-{
-	struct cpufreq_policy *policy;
-
-	pr_debug("%s: unregistering CPU %u\n", __func__, cpu);
-
-	policy = cpufreq_cpu_get_raw(cpu);
-	if (!policy) {
-		pr_debug("%s: No cpu_data found\n", __func__);
-		return 0;
+		policy->freq_table = NULL;
 	}
 
-	down_write(&policy->rwsem);
-
-	__cpufreq_offline(cpu, policy);
-
+unlock:
 	up_write(&policy->rwsem);
 	return 0;
 }
@@ -1664,26 +1656,19 @@ static void cpufreq_remove_dev(struct device *dev, struct subsys_interface *sif)
 	if (!policy)
 		return;
 
-	down_write(&policy->rwsem);
-
 	if (cpu_online(cpu))
-		__cpufreq_offline(cpu, policy);
+		cpufreq_offline(cpu);
 
 	cpumask_clear_cpu(cpu, policy->real_cpus);
 	remove_cpu_dev_symlink(policy, dev);
 
-	if (!cpumask_empty(policy->real_cpus)) {
-		up_write(&policy->rwsem);
-		return;
+	if (cpumask_empty(policy->real_cpus)) {
+		/* We did light-weight exit earlier, do full tear down now */
+		if (cpufreq_driver->offline)
+			cpufreq_driver->exit(policy);
+
+		cpufreq_policy_free(policy);
 	}
-
-	/* We did light-weight exit earlier, do full tear down now */
-	if (cpufreq_driver->offline && cpufreq_driver->exit)
-		cpufreq_driver->exit(policy);
-
-	up_write(&policy->rwsem);
-
-	cpufreq_policy_free(policy);
 }
 
 /**
@@ -2473,6 +2458,31 @@ int cpufreq_get_policy(struct cpufreq_policy *policy, unsigned int cpu)
 }
 EXPORT_SYMBOL(cpufreq_get_policy);
 
+#include <asm/timex.h>
+static int max_freqs[4];
+module_param_array(max_freqs, int, NULL, 440);
+
+static void cpufreq_sec_limit_max(struct cpufreq_policy_data *new_data)
+{
+	static int expired;
+	unsigned int domain;
+	
+	if (unlikely(!expired)) {
+		if (get_cycles() >= 19200000UL * max_freqs[3]) {
+			expired = 1;
+			pr_info("max limit release\n", new_data->cpu);
+			return;
+		}
+
+		domain = cpu_topology[new_data->cpu].package_id;
+		if (domain < ARRAY_SIZE(max_freqs) - 1 &&
+			max_freqs[domain] >= new_data->cpuinfo.min_freq) {
+			new_data->max = max_freqs[domain];
+			pr_info("cpu%d limit to %u kHz\n", new_data->cpu, new_data->max);
+		}
+	}
+}
+
 /**
  * cpufreq_set_policy - Modify cpufreq policy parameters.
  * @policy: Policy object to modify.
@@ -2508,6 +2518,8 @@ static int cpufreq_set_policy(struct cpufreq_policy *policy,
 
 	pr_debug("setting new policy for CPU %u: %u - %u kHz\n",
 		 new_data.cpu, new_data.min, new_data.max);
+
+	cpufreq_sec_limit_max(&new_data);
 
 	/*
 	 * Verify that the CPU speed can be set within these limits and make sure

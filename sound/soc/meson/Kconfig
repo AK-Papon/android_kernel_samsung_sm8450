@@ -98,8 +98,7 @@ config SND_MESON_AXG_PDM
 	  in the Amlogic AXG SoC family
 
 config SND_MESON_CARD_UTILS
-	tristate
-	select SND_DYNAMIC_MINORS
+       tristate
 
 config SND_MESON_CODEC_GLUE
 	tristate

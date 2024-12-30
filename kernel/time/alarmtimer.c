@@ -65,6 +65,8 @@ static struct rtc_timer		rtctimer;
 static struct rtc_device	*rtcdev;
 static DEFINE_SPINLOCK(rtcdev_lock);
 
+extern void log_suspend_abort_reason(const char *fmt, ...);
+
 /**
  * alarmtimer_get_rtcdev - Return selected rtcdevice
  *
@@ -249,6 +251,7 @@ static int alarmtimer_suspend(struct device *dev)
 	unsigned long flags;
 	struct rtc_time tm;
 	int wakeup_bypass_enabled = 0;
+	struct alarm *min_alarm = NULL;
 
 	spin_lock_irqsave(&freezer_delta_lock, flags);
 	min = freezer_delta;
@@ -282,12 +285,21 @@ static int alarmtimer_suspend(struct device *dev)
 			expires = next->expires;
 			min = delta;
 			type = i;
+			min_alarm = container_of(next, struct alarm, node);
 		}
 	}
 	if (min == 0)
 		return 0;
 
+	if (min_alarm)
+		pr_info("soonest alarm : %ps\n", min_alarm->function);
+
 	if (ktime_to_ns(min) < 2 * NSEC_PER_SEC) {
+		if (min_alarm) {
+			pr_info("alarmtimer suspending blocked by %ps\n", min_alarm->function);
+			log_suspend_abort_reason("alarmtimer suspending blocked by %ps\n", min_alarm->function);
+		}
+
 		pm_wakeup_event(dev, 2 * MSEC_PER_SEC);
 		return -EBUSY;
 	}

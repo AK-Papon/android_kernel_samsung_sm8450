@@ -511,7 +511,7 @@ static struct drm_driver etnaviv_drm_driver = {
 	.desc               = "etnaviv DRM",
 	.date               = "20151214",
 	.major              = 1,
-	.minor              = 4,
+	.minor              = 3,
 };
 
 /*

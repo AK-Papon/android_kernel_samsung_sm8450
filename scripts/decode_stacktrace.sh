@@ -9,29 +9,6 @@ if [[ $# < 1 ]]; then
 	exit 1
 fi
 
-# Try to find a Rust demangler
-if type llvm-cxxfilt >/dev/null 2>&1 ; then
-	cppfilt=llvm-cxxfilt
-elif type c++filt >/dev/null 2>&1 ; then
-	cppfilt=c++filt
-	cppfilt_opts=-i
-fi
-
-UTIL_SUFFIX=
-if [[ -z ${LLVM:-} ]]; then
-	UTIL_PREFIX=${CROSS_COMPILE:-}
-else
-	UTIL_PREFIX=llvm-
-	if [[ ${LLVM} == */ ]]; then
-		UTIL_PREFIX=${LLVM}${UTIL_PREFIX}
-	elif [[ ${LLVM} == -* ]]; then
-		UTIL_SUFFIX=${LLVM}
-	fi
-fi
-
-READELF=${UTIL_PREFIX}readelf${UTIL_SUFFIX}
-ADDR2LINE=${UTIL_PREFIX}addr2line${UTIL_SUFFIX}
-
 if [[ $1 == "-r" ]] ; then
 	vmlinux=""
 	basepath="auto"
@@ -56,18 +33,13 @@ else
 	release=""
 fi
 
-declare aarray_support=true
-declare -A cache 2>/dev/null
-if [[ $? != 0 ]]; then
-	aarray_support=false
-else
-	declare -A modcache
-fi
+declare -A cache
+declare -A modcache
 
 find_module() {
 	if [[ "$modpath" != "" ]] ; then
 		for fn in $(find "$modpath" -name "${module//_/[-_]}.ko*") ; do
-			if ${READELF} -WS "$fn" | grep -qwF .debug_line ; then
+			if readelf -WS "$fn" | grep -qwF .debug_line ; then
 				echo $fn
 				return
 			fi
@@ -79,7 +51,7 @@ find_module() {
 	find_module && return
 
 	if [[ $release == "" ]] ; then
-		release=$(gdb -ex 'print init_uts_ns.name.release' -ex 'quit' -quiet -batch "$vmlinux" 2>/dev/null | sed -n 's/\$1 = "\(.*\)".*/\1/p')
+		release=$(gdb -ex 'print init_uts_ns.name.release' -ex 'quit' -quiet -batch "$vmlinux" | sed -n 's/\$1 = "\(.*\)".*/\1/p')
 	fi
 
 	for dn in {/usr/lib/debug,}/lib/modules/$release ; do
@@ -102,7 +74,7 @@ parse_symbol() {
 
 	if [[ $module == "" ]] ; then
 		local objfile=$vmlinux
-	elif [[ $aarray_support == true && "${modcache[$module]+isset}" == "isset" ]]; then
+	elif [[ "${modcache[$module]+isset}" == "isset" ]]; then
 		local objfile=${modcache[$module]}
 	else
 		local objfile=$(find_module)
@@ -110,9 +82,7 @@ parse_symbol() {
 			echo "WARNING! Modules path isn't set, but is needed to parse this symbol" >&2
 			return
 		fi
-		if [[ $aarray_support == true ]]; then
-			modcache[$module]=$objfile
-		fi
+		modcache[$module]=$objfile
 	fi
 
 	# Remove the englobing parenthesis
@@ -132,17 +102,15 @@ parse_symbol() {
 	# Use 'nm vmlinux' to figure out the base address of said symbol.
 	# It's actually faster to call it every time than to load it
 	# all into bash.
-	if [[ $aarray_support == true && "${cache[$module,$name]+isset}" == "isset" ]]; then
+	if [[ "${cache[$module,$name]+isset}" == "isset" ]]; then
 		local base_addr=${cache[$module,$name]}
 	else
-		local base_addr=$(nm "$objfile" 2>/dev/null | awk '$3 == "'$name'" && ($2 == "t" || $2 == "T") {print $1; exit}')
+		local base_addr=$(nm "$objfile" | awk '$3 == "'$name'" && ($2 == "t" || $2 == "T") {print $1; exit}')
 		if [[ $base_addr == "" ]] ; then
 			# address not found
 			return
 		fi
-		if [[ $aarray_support == true ]]; then
-			cache[$module,$name]="$base_addr"
-		fi
+		cache[$module,$name]="$base_addr"
 	fi
 	# Let's start doing the math to get the exact address into the
 	# symbol. First, strip out the symbol total length.
@@ -158,13 +126,11 @@ parse_symbol() {
 
 	# Pass it to addr2line to get filename and line number
 	# Could get more than one result
-	if [[ $aarray_support == true && "${cache[$module,$address]+isset}" == "isset" ]]; then
+	if [[ "${cache[$module,$address]+isset}" == "isset" ]]; then
 		local code=${cache[$module,$address]}
 	else
-		local code=$(${ADDR2LINE} -i -e "$objfile" "$address" 2>/dev/null)
-		if [[ $aarray_support == true ]]; then
-			cache[$module,$address]=$code
-		fi
+		local code=$(${CROSS_COMPILE}addr2line -i -e "$objfile" "$address")
+		cache[$module,$address]=$code
 	fi
 
 	# addr2line doesn't return a proper error code if it fails, so
@@ -179,12 +145,6 @@ parse_symbol() {
 
 	# In the case of inlines, move everything to same line
 	code=${code//$'\n'/' '}
-
-	# Demangle if the name looks like a Rust symbol and if
-	# we got a Rust demangler
-	if [[ $name =~ ^_R && $cppfilt != "" ]] ; then
-		name=$("$cppfilt" "$cppfilt_opts" "$name")
-	fi
 
 	# Replace old address with pretty line numbers
 	symbol="$segment$name ($code)"
