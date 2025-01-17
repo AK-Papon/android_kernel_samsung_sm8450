@@ -70,8 +70,6 @@
 
 #include "af_netlink.h"
 
-#include <linux/rtnetlink.h>
-
 struct listeners {
 	struct rcu_head		rcu;
 	unsigned long		masks[];
@@ -79,14 +77,6 @@ struct listeners {
 
 /* state bits */
 #define NETLINK_S_CONGESTED		0x0
-
-#define CONFIG_DEBUG_RTNL_LATENCY
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-static unsigned long time_latency;
-static char owner_comm[32];
-#endif
-
-extern struct mutex rtnl_mutex;
 
 static inline int netlink_is_kernel(struct sock *sk)
 {
@@ -136,7 +126,7 @@ static const char *const nlk_cb_mutex_key_strings[MAX_LINKS + 1] = {
 	"nlk_cb_mutex-MAX_LINKS"
 };
 
-static int netlink_dump(struct sock *sk);
+static int netlink_dump(struct sock *sk, bool lock_taken);
 
 /* nl_table locking explained:
  * Lookup and traversal are protected with an RCU read-side lock. Insertion
@@ -167,7 +157,7 @@ static inline u32 netlink_group_mask(u32 group)
 static struct sk_buff *netlink_to_full_skb(const struct sk_buff *skb,
 					   gfp_t gfp_mask)
 {
-	unsigned int len = skb_end_offset(skb);
+	unsigned int len = skb->len;
 	struct sk_buff *new;
 
 	new = alloc_skb(len, gfp_mask);
@@ -376,7 +366,7 @@ static void netlink_skb_destructor(struct sk_buff *skb)
 	if (is_vmalloc_addr(skb->head)) {
 		if (!skb->cloned ||
 		    !atomic_dec_return(&(skb_shinfo(skb)->dataref)))
-			vfree(skb->head);
+			vfree_atomic(skb->head);
 
 		skb->head = NULL;
 	}
@@ -395,15 +385,6 @@ static void netlink_skb_set_owner_r(struct sk_buff *skb, struct sock *sk)
 
 static void netlink_sock_destruct(struct sock *sk)
 {
-	struct netlink_sock *nlk = nlk_sk(sk);
-
-	if (nlk->cb_running) {
-		if (nlk->cb.done)
-			nlk->cb.done(&nlk->cb);
-		module_put(nlk->cb.module);
-		kfree_skb(nlk->cb.skb);
-	}
-
 	skb_queue_purge(&sk->sk_receive_queue);
 
 	if (!sock_flag(sk, SOCK_DEAD)) {
@@ -414,14 +395,6 @@ static void netlink_sock_destruct(struct sock *sk)
 	WARN_ON(atomic_read(&sk->sk_rmem_alloc));
 	WARN_ON(refcount_read(&sk->sk_wmem_alloc));
 	WARN_ON(nlk_sk(sk)->groups);
-}
-
-static void netlink_sock_destruct_work(struct work_struct *work)
-{
-	struct netlink_sock *nlk = container_of(work, struct netlink_sock,
-						work);
-
-	sk_free(&nlk->sk);
 }
 
 /* This lock without WQ_FLAG_EXCLUSIVE is good on UP and it is _very_ bad on
@@ -740,12 +713,6 @@ static void deferred_put_nlk_sk(struct rcu_head *head)
 	if (!refcount_dec_and_test(&sk->sk_refcnt))
 		return;
 
-	if (nlk->cb_running && nlk->cb.done) {
-		INIT_WORK(&nlk->work, netlink_sock_destruct_work);
-		schedule_work(&nlk->work);
-		return;
-	}
-
 	sk_free(sk);
 }
 
@@ -793,6 +760,14 @@ static int netlink_release(struct socket *sock)
 					  };
 		blocking_notifier_call_chain(&netlink_chain,
 				NETLINK_URELEASE, &n);
+	}
+
+	/* Terminate any outstanding dump */
+	if (nlk->cb_running) {
+		if (nlk->cb.done)
+			nlk->cb.done(&nlk->cb);
+		module_put(nlk->cb.module);
+		kfree_skb(nlk->cb.skb);
 	}
 
 	module_put(nlk->module);
@@ -1937,7 +1912,7 @@ static int netlink_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 	struct sock *sk = sock->sk;
 	struct netlink_sock *nlk = nlk_sk(sk);
 	int noblock = flags & MSG_DONTWAIT;
-	size_t copied;
+	size_t copied, max_recvmsg_len;
 	struct sk_buff *skb, *data_skb;
 	int err, ret;
 
@@ -1970,9 +1945,10 @@ static int netlink_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 #endif
 
 	/* Record the max length of recvmsg() calls for future allocations */
-	nlk->max_recvmsg_len = max(nlk->max_recvmsg_len, len);
-	nlk->max_recvmsg_len = min_t(size_t, nlk->max_recvmsg_len,
-				     SKB_WITH_OVERHEAD(32768));
+	max_recvmsg_len = max(READ_ONCE(nlk->max_recvmsg_len), len);
+	max_recvmsg_len = min_t(size_t, max_recvmsg_len,
+				SKB_WITH_OVERHEAD(32768));
+	WRITE_ONCE(nlk->max_recvmsg_len, max_recvmsg_len);
 
 	copied = data_skb->len;
 	if (len < copied) {
@@ -2005,7 +1981,7 @@ static int netlink_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 
 	if (READ_ONCE(nlk->cb_running) &&
 	    atomic_read(&sk->sk_rmem_alloc) <= sk->sk_rcvbuf / 2) {
-		ret = netlink_dump(sk);
+		ret = netlink_dump(sk, false);
 		if (ret) {
 			sk->sk_err = -ret;
 			sk->sk_error_report(sk);
@@ -2164,8 +2140,9 @@ void __netlink_clear_multicast_users(struct sock *ksk, unsigned int group)
 {
 	struct sock *sk;
 	struct netlink_table *tbl = &nl_table[ksk->sk_protocol];
+	struct hlist_node *tmp;
 
-	sk_for_each_bound(sk, &tbl->mc_list)
+	sk_for_each_bound_safe(sk, tmp, &tbl->mc_list)
 		netlink_update_socket_mc(nlk_sk(sk), group, 0);
 }
 
@@ -2215,35 +2192,20 @@ static int netlink_dump_done(struct netlink_sock *nlk, struct sk_buff *skb,
 	return 0;
 }
 
-static int netlink_dump(struct sock *sk)
+static int netlink_dump(struct sock *sk, bool lock_taken)
 {
 	struct netlink_sock *nlk = nlk_sk(sk);
 	struct netlink_ext_ack extack = {};
 	struct netlink_callback *cb;
 	struct sk_buff *skb = NULL;
+	size_t max_recvmsg_len;
 	struct module *module;
 	int err = -ENOBUFS;
 	int alloc_min_size;
 	int alloc_size;
 
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	unsigned long local_time_latency = jiffies;
-	
-	mutex_lock(nlk->cb_mutex);
-	
-	if (sk->sk_protocol == NETLINK_ROUTE) {
-		if (time_after(jiffies, local_time_latency + 1 * HZ / 2)) {
-			pr_err("rtnl_lock: %s: %s took over 500 msec to grab local rtnl_lock!\n",
-				__func__, current->comm);
-			dump_stack();
-		}
-
-		strncpy(owner_comm, current->comm, 31);
-		time_latency = jiffies;	
-	}
-#else
-	mutex_lock(nlk->cb_mutex);
-#endif
+	if (!lock_taken)
+		mutex_lock(nlk->cb_mutex);
 	if (!nlk->cb_running) {
 		err = -EINVAL;
 		goto errout_skb;
@@ -2260,8 +2222,9 @@ static int netlink_dump(struct sock *sk)
 	cb = &nlk->cb;
 	alloc_min_size = max_t(int, cb->min_dump_alloc, NLMSG_GOODSIZE);
 
-	if (alloc_min_size < nlk->max_recvmsg_len) {
-		alloc_size = nlk->max_recvmsg_len;
+	max_recvmsg_len = READ_ONCE(nlk->max_recvmsg_len);
+	if (alloc_min_size < max_recvmsg_len) {
+		alloc_size = max_recvmsg_len;
 		skb = alloc_skb(alloc_size,
 				(GFP_KERNEL & ~__GFP_DIRECT_RECLAIM) |
 				__GFP_NOWARN | __GFP_NORETRY);
@@ -2301,17 +2264,6 @@ static int netlink_dump(struct sock *sk)
 
 	if (nlk->dump_done_errno > 0 ||
 	    skb_tailroom(skb) < nlmsg_total_size(sizeof(nlk->dump_done_errno))) {
-
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-		if (sk->sk_protocol == NETLINK_ROUTE) {
-			if (time_after(jiffies, time_latency + 1 * HZ / 2)) {
-				pr_err("rtnl_lock: %s: %s(%s) took over 500 msec to unlock\n", __func__,
-					owner_comm, current->comm);
-				dump_stack();
-			}
-			time_latency = jiffies;
-		}
-#endif
 		mutex_unlock(nlk->cb_mutex);
 
 		if (sk_filter(sk, skb))
@@ -2346,32 +2298,12 @@ static int netlink_dump(struct sock *sk)
 	WRITE_ONCE(nlk->cb_running, false);
 	module = cb->module;
 	skb = cb->skb;
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-		if (sk->sk_protocol == NETLINK_ROUTE) {
-			if (time_after(jiffies, time_latency + 1 * HZ / 2)) {
-				pr_err("rtnl_lock: %s: %s(%s) took over 500 msec to unlock\n", __func__,
-					owner_comm, current->comm);
-				dump_stack();
-			}
-			time_latency = jiffies;
-		}
-#endif
 	mutex_unlock(nlk->cb_mutex);
 	module_put(module);
 	consume_skb(skb);
 	return 0;
 
 errout_skb:
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-		if (sk->sk_protocol == NETLINK_ROUTE) {
-			if (time_after(jiffies, time_latency + 1 * HZ / 2)) {
-				pr_err("rtnl_lock: %s: %s(%s) took over 500 msec to unlock\n", __func__,
-					owner_comm, current->comm);
-				dump_stack();
-			}
-			time_latency = jiffies;
-		}
-#endif
 	mutex_unlock(nlk->cb_mutex);
 	kfree_skb(skb);
 	return err;
@@ -2385,9 +2317,6 @@ int __netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 	struct netlink_callback *cb;
 	struct sock *sk;
 	int ret;
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-	unsigned long local_time_latency = jiffies;
-#endif
 
 	refcount_inc(&skb->users);
 
@@ -2398,24 +2327,7 @@ int __netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 	}
 
 	nlk = nlk_sk(sk);
-
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
 	mutex_lock(nlk->cb_mutex);
-
-	if (sk->sk_protocol == NETLINK_ROUTE) {
-		if (time_after(jiffies, local_time_latency + 1 * HZ / 2)) {
-			pr_err("rtnl_lock: %s: %s took over 500 msec to grab local rtnl_lock!\n",
-				__func__, current->comm);
-			dump_stack();
-		}
-
-		strncpy(owner_comm, current->comm, 31);
-		time_latency = jiffies;	
-	}
-#else
-	mutex_lock(nlk->cb_mutex);
-#endif	
-
 	/* A dump is in progress... */
 	if (nlk->cb_running) {
 		ret = -EBUSY;
@@ -2449,19 +2361,7 @@ int __netlink_dump_start(struct sock *ssk, struct sk_buff *skb,
 	WRITE_ONCE(nlk->cb_running, true);
 	nlk->dump_done_errno = INT_MAX;
 
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-		if (sk->sk_protocol == NETLINK_ROUTE) {
-			if (time_after(jiffies, time_latency + 1 * HZ / 2)) {
-				pr_err("rtnl_lock: %s: %s(%s) took over 500 msec to unlock\n", __func__,
-					owner_comm, current->comm);
-				dump_stack();
-			}
-			time_latency = jiffies;
-		}
-#endif
-	mutex_unlock(nlk->cb_mutex);
-
-	ret = netlink_dump(sk);
+	ret = netlink_dump(sk, true);
 
 	sock_put(sk);
 
@@ -2477,16 +2377,6 @@ error_put:
 	module_put(control->module);
 error_unlock:
 	sock_put(sk);
-#ifdef CONFIG_DEBUG_RTNL_LATENCY
-		if (sk->sk_protocol == NETLINK_ROUTE) {
-			if (time_after(jiffies, time_latency + 1 * HZ / 2)) {
-				pr_err("rtnl_lock: %s: %s(%s) took over 500 msec to unlock\n", __func__,
-					owner_comm, current->comm);
-				dump_stack();
-			}
-			time_latency = jiffies;
-		}
-#endif
 	mutex_unlock(nlk->cb_mutex);
 error_free:
 	kfree_skb(skb);

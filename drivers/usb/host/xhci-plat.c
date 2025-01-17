@@ -25,9 +25,6 @@
 #include "xhci-mvebu.h"
 #include "xhci-rcar.h"
 
-#undef dev_dbg
-#define dev_dbg dev_err
-
 static struct hc_driver __read_mostly xhci_plat_hc_driver;
 
 static int xhci_plat_setup(struct usb_hcd *hcd);
@@ -361,6 +358,9 @@ static int xhci_plat_probe(struct platform_device *pdev)
 		if (device_property_read_bool(tmpdev, "quirk-broken-port-ped"))
 			xhci->quirks |= XHCI_BROKEN_PORT_PED;
 
+		if (device_property_read_bool(tmpdev, "xhci-sg-trb-cache-size-quirk"))
+			xhci->quirks |= XHCI_SG_TRB_CACHE_SIZE_QUIRK;
+
 		device_property_read_u32(tmpdev, "imod-interval-ns",
 					 &xhci->imod_interval);
 	}
@@ -481,8 +481,6 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	int ret;
 
-	dev_dbg(dev, "xhci-plat suspend\n");
-
 	if (pm_runtime_suspended(dev))
 		pm_runtime_resume(dev);
 
@@ -511,7 +509,6 @@ static int __maybe_unused xhci_plat_resume(struct device *dev)
 	struct xhci_hcd	*xhci = hcd_to_xhci(hcd);
 	int ret;
 
-	dev_dbg(dev, "xhci-plat resume\n");
 	if (!device_may_wakeup(dev) && (xhci->quirks & XHCI_SUSPEND_RESUME_CLKS)) {
 		ret = clk_prepare_enable(xhci->clk);
 		if (ret)
@@ -553,7 +550,6 @@ static int __maybe_unused xhci_plat_runtime_suspend(struct device *dev)
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 	int ret;
 
-	dev_dbg(dev, "xhci-plat runtime suspend\n");
 	ret = xhci_priv_suspend_quirk(hcd);
 	if (ret)
 		return ret;
@@ -566,7 +562,6 @@ static int __maybe_unused xhci_plat_runtime_resume(struct device *dev)
 	struct usb_hcd  *hcd = dev_get_drvdata(dev);
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
 
-	dev_dbg(dev, "xhci-plat runtime resume\n");
 	return xhci_resume(xhci, 0);
 }
 

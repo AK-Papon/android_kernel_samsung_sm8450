@@ -119,11 +119,6 @@ gfp_t readahead_gfp_mask(struct address_space *x)
 {
 	gfp_t mask = mapping_gfp_mask(x) | __GFP_NORETRY | __GFP_NOWARN;
 
-	if (mask & __GFP_MOVABLE) {
-		mask |= __GFP_CMA;
-		mask &= ~__GFP_HIGHMEM;
-	}
-
 	trace_android_rvh_set_readahead_gfp_mask(&mask);
 	return mask;
 }
@@ -227,7 +222,7 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 			read_pages(ractl, &page_pool, true);
 			continue;
 		}
-
+		trace_android_vh_io_statistics(mapping, index + i, 1, true, false);
 		page = __page_cache_alloc(gfp_mask);
 		if (!page)
 			break;

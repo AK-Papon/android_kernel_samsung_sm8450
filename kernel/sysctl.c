@@ -104,10 +104,6 @@
 #include <linux/nmi.h>
 #endif
 
-#ifdef CONFIG_HUGEPAGE_POOL
-#include <linux/hugepage_pool.h>
-#endif
-
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
@@ -1866,6 +1862,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= sched_rt_handler,
+		.extra1		= SYSCTL_ONE,
+		.extra2		= SYSCTL_INT_MAX,
 	},
 	{
 		.procname	= "sched_rt_runtime_us",
@@ -1873,6 +1871,8 @@ static struct ctl_table kern_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= sched_rt_handler,
+		.extra1		= SYSCTL_NEG_ONE,
+		.extra2		= SYSCTL_INT_MAX,
 	},
 	{
 		.procname	= "sched_deadline_period_max_us",
@@ -2885,25 +2885,6 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= sysctl_vm_numa_stat_handler,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
-	},
-#endif
-	{
-		.procname	= "mmap_readaround_limit",
-		.data		= &mmap_readaround_limit,
-		.maxlen		= sizeof(mmap_readaround_limit),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-	},
-#ifdef CONFIG_HUGEPAGE_POOL
-	{
-		.procname	= "use_hugepage_pool_global",
-		.data		= &use_hugepage_pool_global,
-		.maxlen		= sizeof(use_hugepage_pool_global),
-		.mode		= 0666,
-		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= SYSCTL_ZERO,
 		.extra2		= SYSCTL_ONE,
 	},

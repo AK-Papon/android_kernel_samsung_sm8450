@@ -28,7 +28,6 @@
 
 #include "uas-detect.h"
 #include "scsiglue.h"
-#include "usb.h"
 
 #define MAX_CMNDS 256
 
@@ -81,7 +80,6 @@ static int uas_try_complete(struct scsi_cmnd *cmnd, const char *caller);
 static void uas_free_streams(struct uas_dev_info *devinfo);
 static void uas_log_cmd_state(struct scsi_cmnd *cmnd, const char *prefix,
 				int status);
-extern int usb_remove_device(struct usb_device *udev);
 
 /*
  * This driver needs its own workqueue, as we need to control memory allocation.
@@ -426,6 +424,7 @@ static void uas_data_cmplt(struct urb *urb)
 			uas_log_cmd_state(cmnd, "data cmplt err", status);
 		/* error: no data transfered */
 		scsi_set_resid(cmnd, sdb->length);
+		set_host_byte(cmnd, DID_ERROR);
 	} else {
 		scsi_set_resid(cmnd, sdb->length - urb->actual_length);
 	}
@@ -796,12 +795,7 @@ static int uas_eh_device_reset_handler(struct scsi_cmnd *cmnd)
 	usb_kill_anchored_urbs(&devinfo->data_urbs);
 	uas_zap_pending(devinfo, DID_RESET);
 
-	if (le16_to_cpu(udev->descriptor.idVendor) == 0x04e8 &&
-		(le16_to_cpu(udev->descriptor.idProduct) == 0x4001 || le16_to_cpu(udev->descriptor.idProduct) == 0x61f5)) {
-		shost_printk(KERN_INFO, sdev->host, "%s skip reset for T5/T7, just remove\n", __func__);		
-		err = usb_remove_device(udev);
-	} else
-		err = usb_reset_device(udev);
+	err = usb_reset_device(udev);
 
 	spin_lock_irqsave(&devinfo->lock, flags);
 	devinfo->resetting = 0;

@@ -118,14 +118,6 @@ static __init int kernel_exit_sysfs_init(void)
 late_initcall(kernel_exit_sysfs_init);
 #endif
 
-#ifdef CONFIG_SECURITY_DEFEX
-#include <linux/defex.h>
-#endif
-
-#if defined(CONFIG_MEMORY_ZEROISATION)
-#include <trace/hooks/mz.h>
-#endif
-
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
 	nr_threads--;
@@ -442,6 +434,8 @@ retry:
 	 * Search through everything else, we should not get here often.
 	 */
 	for_each_process(g) {
+		if (atomic_read(&mm->mm_users) <= 1)
+			break;
 		if (g->flags & PF_KTHREAD)
 			continue;
 		for_each_thread(g, c) {
@@ -545,10 +539,6 @@ static void exit_mm(void)
 	mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
-
-#if defined(CONFIG_MEMORY_ZEROISATION)
-	trace_android_vh_mz_exit(current);
-#endif
 }
 
 static struct task_struct *find_alive_thread(struct task_struct *p)
@@ -783,10 +773,6 @@ void __noreturn do_exit(long code)
 	 * Then fix up important state like USER_DS and preemption.
 	 * Then do everything else.
 	 */
-
-#ifdef CONFIG_SECURITY_DEFEX
-	task_defex_zero_creds(current);
-#endif
 
 	WARN_ON(blk_needs_flush_plug(tsk));
 
