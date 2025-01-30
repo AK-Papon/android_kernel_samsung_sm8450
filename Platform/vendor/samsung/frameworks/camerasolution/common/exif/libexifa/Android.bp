@@ -1,0 +1,48 @@
+cc_library_shared {
+    name: "libexifa.camera.samsung",
+    vendor_available: true,
+
+    srcs: [
+        "canon/exif-mnote-data-canon.c",
+        "canon/mnote-canon-tag.c",
+        "canon/mnote-canon-entry.c",
+        "pentax/mnote-pentax-tag.c",
+        "pentax/mnote-pentax-entry.c",
+        "pentax/exif-mnote-data-pentax.c",
+        "exif-loader.c",
+        "exif-byte-order.c",
+        "exif-content.c",
+        "exif-log.c",
+        "exif-mem.c",
+        "olympus/mnote-olympus-tag.c",
+        "olympus/mnote-olympus-entry.c",
+        "olympus/exif-mnote-data-olympus.c",
+        "exif-format.c",
+        "exif-utils.c",
+        "exif-entry.c",
+        "exif-ifd.c",
+        "exif-data.c",
+        "exif-tag.c",
+        "fuji/mnote-fuji-tag.c",
+        "fuji/mnote-fuji-entry.c",
+        "fuji/exif-mnote-data-fuji.c",
+        "exif-mnote-data.c",
+    ],
+
+    shared_libs: [
+        "liblog",
+    ],
+
+    include_dirs: [
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/canon",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/fuji",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/olympus",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/pentax",
+    ],
+
+    cflags: [
+        "-Wno-enum-compare",
+    ],
+}

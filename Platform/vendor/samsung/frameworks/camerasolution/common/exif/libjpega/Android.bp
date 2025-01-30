@@ -1,0 +1,23 @@
+cc_library_shared {
+    name: "libjpega.camera.samsung",
+
+    srcs: [
+        "jpeg-data.c",
+        "jpeg-marker.c",
+        "exif-i18n.c",
+    ],
+
+    include_dirs: [
+        "vendor/samsung/frameworks/camerasolution/common/exif/libjpega/include/libjpeg",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/canon",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/fuji",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/olympus",
+        "vendor/samsung/frameworks/camerasolution/common/exif/libexifa/include/libexif/pentax",
+    ],
+
+    shared_libs: [
+        "libexifa.camera.samsung",
+    ],
+}
