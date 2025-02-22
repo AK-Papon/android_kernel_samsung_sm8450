@@ -781,6 +781,14 @@ else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS += -Os
 endif
 
+ifdef CONFIG_LLVM_MLGO_REGISTER
+# Enable MLGO for register allocation. default, release, development
+KBUILD_CFLAGS	+= -mllvm -regalloc-enable-advisor=release \
+		   -mllvm -enable-local-reassign
+KBUILD_LDFLAGS	+= -mllvm -regalloc-enable-advisor=release \
+		   -mllvm -enable-local-reassign
+endif
+
 ifdef CONFIG_LLVM_POLLY
 KBUILD_CFLAGS	+= -mllvm -polly \
 		   -mllvm -polly-run-inliner \
