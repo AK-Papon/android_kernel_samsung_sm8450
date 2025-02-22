@@ -626,6 +626,12 @@ config SHADOW_CALL_STACK
 	  reading and writing arbitrary memory may be able to locate them
 	  and hijack control flow by modifying the stacks.
 
+config LLVM_MLGO_REGISTER
+	bool "Enable Machine Learning Guided Optimizations (MLGO)"
+	help
+	  This enables Machine Learning Guided Optimizations (MLGO) for register
+	  allocation on LLVM.
+
 config LTO
 	bool
 	help
