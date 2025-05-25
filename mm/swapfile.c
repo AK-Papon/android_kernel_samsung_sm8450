@@ -2158,7 +2158,7 @@ static int unuse_mm(struct mm_struct *mm, unsigned int type,
 
 	mmap_read_lock(mm);
 	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (vma->anon_vma) {
+		if (vma->anon_vma && !is_vm_hugetlb_page(vma)) {
 			ret = unuse_vma(vma, type, frontswap,
 					fs_pages_to_unuse);
 			if (ret)
@@ -3211,10 +3211,6 @@ static bool swap_discardable(struct swap_info_struct *si)
 	return true;
 }
 
-#if IS_ENABLED(CONFIG_ZRAM)
-zram_oem_func zram_oem_fn;
-#endif
-
 SYSCALL_DEFINE2(swapon, const char __user *, specialfile, int, swap_flags)
 {
 	struct swap_info_struct *p;
@@ -3478,15 +3474,6 @@ out:
 		inode_unlock(inode);
 	if (!error)
 		enable_swap_slots_cache();
-#if IS_ENABLED(CONFIG_ZRAM)
-	if (!error && !zram_oem_fn) {
-		const struct block_device_operations *ops;
-
-		ops = p->bdev->bd_disk->fops;
-		if (ops->android_oem_data1)
-			zram_oem_fn = (zram_oem_func)ops->android_oem_data1;
-	}
-#endif
 	return error;
 }
 

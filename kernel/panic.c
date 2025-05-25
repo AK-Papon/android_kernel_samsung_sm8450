@@ -62,8 +62,6 @@ static unsigned int warn_limit __read_mostly;
 int panic_timeout = CONFIG_PANIC_TIMEOUT;
 EXPORT_SYMBOL_GPL(panic_timeout);
 
-extern bool thermal_poweroff_running(void); // SEC_PM
-
 #define PANIC_PRINT_TASK_INFO		0x00000001
 #define PANIC_PRINT_MEM_INFO		0x00000002
 #define PANIC_PRINT_TIMER_INFO		0x00000004
@@ -261,8 +259,6 @@ void panic(const char *fmt, ...)
 		 */
 		panic_on_warn = 0;
 	}
-	if (thermal_poweroff_running()) // SEC_PM
-		machine_power_off();
 
 	/*
 	 * Disable local interrupts. This will prevent panic_smp_self_stop

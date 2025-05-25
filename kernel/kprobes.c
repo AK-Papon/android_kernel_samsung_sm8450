@@ -43,10 +43,6 @@
 #include <asm/errno.h>
 #include <linux/uaccess.h>
 
-#ifdef CONFIG_RKP
-#include <linux/rkp.h>
-#endif
-
 #define KPROBE_HASH_BITS 6
 #define KPROBE_TABLE_SIZE (1 << KPROBE_HASH_BITS)
 
@@ -122,9 +118,6 @@ void __weak *alloc_insn_page(void)
 
 void __weak free_insn_page(void *page)
 {
-#ifdef CONFIG_RKP
-	uh_call(UH_APP_RKP, RKP_KPROBE_PAGE, (u64)page, 4096, 1, 0);
-#endif
 	module_memfree(page);
 }
 
@@ -1616,14 +1609,10 @@ static inline int check_kprobe_rereg(struct kprobe *p)
 
 int __weak arch_check_ftrace_location(struct kprobe *p)
 {
-	unsigned long ftrace_addr;
+	unsigned long addr = (unsigned long)p->addr;
 
-	ftrace_addr = ftrace_location((unsigned long)p->addr);
-	if (ftrace_addr) {
+	if (ftrace_location(addr) == addr) {
 #ifdef CONFIG_KPROBES_ON_FTRACE
-		/* Given address is not on the instruction boundary */
-		if ((unsigned long)p->addr != ftrace_addr)
-			return -EILSEQ;
 		p->flags |= KPROBE_FLAG_FTRACE;
 #else	/* !CONFIG_KPROBES_ON_FTRACE */
 		return -EINVAL;

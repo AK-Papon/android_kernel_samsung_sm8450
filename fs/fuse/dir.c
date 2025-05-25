@@ -1426,7 +1426,7 @@ static const char *fuse_get_link(struct dentry *dentry, struct inode *inode,
 		goto out_err;
 
 	if (fc->cache_symlinks)
-		return page_get_link(dentry, inode, callback);
+		return page_get_link_raw(dentry, inode, callback);
 
 	err = -ECHILD;
 	if (!dentry)
@@ -1579,7 +1579,7 @@ void fuse_set_nowrite(struct inode *inode)
 	BUG_ON(fi->writectr < 0);
 	fi->writectr += FUSE_NOWRITE;
 	spin_unlock(&fi->lock);
-	fuse_wait_event(fi->page_waitq, fi->writectr == FUSE_NOWRITE);
+	wait_event(fi->page_waitq, fi->writectr == FUSE_NOWRITE);
 }
 
 /*

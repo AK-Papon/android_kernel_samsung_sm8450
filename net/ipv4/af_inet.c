@@ -117,9 +117,6 @@
 #endif
 #include <net/l3mdev.h>
 #include <net/compat.h>
-#ifdef CONFIG_NET_ANALYTICS
-#include <net/analytics.h>
-#endif
 
 #include <trace/events/sock.h>
 
@@ -376,31 +373,29 @@ lookup_protocol:
 		inet->inet_sport = htons(inet->inet_num);
 		/* Add to protocol hash chains. */
 		err = sk->sk_prot->hash(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
+		if (err)
+			goto out_sk_release;
 	}
 
 	if (sk->sk_prot->init) {
 		err = sk->sk_prot->init(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
+		if (err)
+			goto out_sk_release;
 	}
 
 	if (!kern) {
 		err = BPF_CGROUP_RUN_PROG_INET_SOCK(sk);
-		if (err) {
-			sk_common_release(sk);
-			goto out;
-		}
+		if (err)
+			goto out_sk_release;
 	}
 out:
 	return err;
 out_rcu_unlock:
 	rcu_read_unlock();
+	goto out;
+out_sk_release:
+	sk_common_release(sk);
+	sock->sk = NULL;
 	goto out;
 }
 
@@ -828,23 +823,12 @@ EXPORT_SYMBOL_GPL(inet_send_prepare);
 int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
-#ifdef CONFIG_NET_ANALYTICS
-	int err;
-#endif
 
 	if (unlikely(inet_send_prepare(sk)))
 		return -EAGAIN;
 
-#ifdef CONFIG_NET_ANALYTICS
-	err = INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg,
-			       sk, msg, size);
-	net_usr_tx(sk, err);
-
-	return err;
-#else
 	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg,
 			       sk, msg, size);
-#endif
 }
 EXPORT_SYMBOL(inet_sendmsg);
 
@@ -882,11 +866,6 @@ int inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 			      flags & ~MSG_DONTWAIT, &addr_len);
 	if (err >= 0)
 		msg->msg_namelen = addr_len;
-
-#ifdef CONFIG_NET_ANALYTICS
-	net_usr_rx(sk, err);
-#endif
-
 	return err;
 }
 EXPORT_SYMBOL(inet_recvmsg);

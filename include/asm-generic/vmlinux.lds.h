@@ -426,22 +426,6 @@
 	__end_ro_after_init = .;
 #endif
 
-#ifdef CONFIG_UH
-#define UH_RO_SECTION						\
-	. = ALIGN(4096);						\
-	.uh_bss       : AT(ADDR(.uh_bss) - LOAD_OFFSET) {	\
-		*(.uh_bss.page_aligned)				\
-		*(.uh_bss)						\
-	} = 0								\
-									\
-	.uh_ro        : AT(ADDR(.uh_ro) - LOAD_OFFSET) {	\
-		*(.rkp_ro)						\
-		*(.kdp_ro)						\
-	}
-#else
-#define UH_RO_SECTION
-#endif
-
 /*
  * Read only Data
  */
@@ -449,7 +433,7 @@
 	. = ALIGN((align));						\
 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
 		__start_rodata = .;					\
-		*(.rodata) *(.rodata.*)					\
+		*(.rodata) *(.rodata.*) *(.data.rel.ro*)		\
 		SCHED_DATA						\
 		RO_AFTER_INIT_DATA	/* Read only after init */	\
 		. = ALIGN(8);						\
@@ -462,9 +446,6 @@
 	.rodata1          : AT(ADDR(.rodata1) - LOAD_OFFSET) {		\
 		*(.rodata1)						\
 	}								\
-									\
-	/* uH */					\
-	UH_RO_SECTION				\
 									\
 	/* PCI quirks */						\
 	.pci_fixup        : AT(ADDR(.pci_fixup) - LOAD_OFFSET) {	\
@@ -791,6 +772,7 @@
 	EARLYCON_TABLE()						\
 	LSM_TABLE()							\
 	EARLY_LSM_TABLE()						\
+	KUNIT_TABLE()
 
 #define INIT_TEXT							\
 	*(.init.text .init.text.*)					\
@@ -1216,7 +1198,6 @@
 		INIT_CALLS						\
 		CON_INITCALL						\
 		INIT_RAM_FS						\
-		KUNIT_TABLE()						\
 	}
 
 #define BSS_SECTION(sbss_align, bss_align, stop_align)			\

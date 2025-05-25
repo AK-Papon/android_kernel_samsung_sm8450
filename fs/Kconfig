@@ -145,7 +145,6 @@ menu "DOS/FAT/EXFAT/NT Filesystems"
 
 source "fs/fat/Kconfig"
 source "fs/exfat/Kconfig"
-source "fs/sdfat/Kconfig"
 source "fs/ntfs/Kconfig"
 
 endmenu
@@ -318,6 +317,7 @@ config GRACE_PERIOD
 config LOCKD
 	tristate
 	depends on FILE_LOCKING
+	select CRC32
 	select GRACE_PERIOD
 
 config LOCKD_V4
@@ -337,7 +337,6 @@ config NFS_COMMON
 
 source "net/sunrpc/Kconfig"
 source "fs/ceph/Kconfig"
-source "fs/ksmbd/Kconfig"
 source "fs/cifs/Kconfig"
 source "fs/coda/Kconfig"
 source "fs/afs/Kconfig"

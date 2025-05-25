@@ -25,7 +25,6 @@
 #include <linux/mutex.h>
 #include <linux/pm_runtime.h>
 #include <linux/netdevice.h>
-#include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/mm.h>
 #include <linux/sysfs.h>
@@ -992,7 +991,7 @@ int device_links_check_suppliers(struct device *dev)
 	mutex_lock(&fwnode_link_lock);
 	if (dev->fwnode && !list_empty(&dev->fwnode->suppliers) &&
 	    !fw_devlink_is_permissive()) {
-		dev_info(dev, "probe deferral - wait for supplier %pfwP\n",
+		dev_dbg(dev, "probe deferral - wait for supplier %pfwP\n",
 			list_first_entry(&dev->fwnode->suppliers,
 			struct fwnode_link,
 			c_hook)->supplier);
@@ -1010,7 +1009,7 @@ int device_links_check_suppliers(struct device *dev)
 		if (link->status != DL_STATE_AVAILABLE &&
 		    !(link->flags & DL_FLAG_SYNC_STATE_ONLY)) {
 			device_links_missing_supplier(dev);
-			dev_info(dev, "probe deferral - supplier %s not ready\n",
+			dev_dbg(dev, "probe deferral - supplier %s not ready\n",
 				dev_name(link->supplier));
 			ret = -EPROBE_DEFER;
 			break;
@@ -2195,7 +2194,6 @@ static int dev_uevent(struct kset *kset, struct kobject *kobj,
 		      struct kobj_uevent_env *env)
 {
 	struct device *dev = kobj_to_dev(kobj);
-	struct device_driver *driver;
 	int retval = 0;
 
 	/* add device node properties if present */
@@ -2224,12 +2222,8 @@ static int dev_uevent(struct kset *kset, struct kobject *kobj,
 	if (dev->type && dev->type->name)
 		add_uevent_var(env, "DEVTYPE=%s", dev->type->name);
 
-	/* Synchronize with module_remove_driver() */
-	rcu_read_lock();
-	driver = READ_ONCE(dev->driver);
-	if (driver)
-		add_uevent_var(env, "DRIVER=%s", driver->name);
-	rcu_read_unlock();
+	if (dev->driver)
+		add_uevent_var(env, "DRIVER=%s", dev->driver->name);
 
 	/* Add common DT information about the device */
 	of_device_uevent(dev, env);
@@ -2299,8 +2293,11 @@ static ssize_t uevent_show(struct device *dev, struct device_attribute *attr,
 	if (!env)
 		return -ENOMEM;
 
+	/* Synchronize with really_probe() */
+	device_lock(dev);
 	/* let the kset specific function add its keys */
 	retval = kset->uevent_ops->uevent(kset, &dev->kobj, env);
+	device_unlock(dev);
 	if (retval)
 		goto out;
 
@@ -3153,8 +3150,6 @@ int device_add(struct device *dev)
 	int error = -EINVAL;
 	struct kobject *glue_dir = NULL;
 
-	int ret = 0;
-
 	dev = get_device(dev);
 	if (!dev)
 		goto done;
@@ -3249,9 +3244,7 @@ int device_add(struct device *dev)
 		blocking_notifier_call_chain(&dev->bus->p->bus_notifier,
 					     BUS_NOTIFY_ADD_DEVICE, dev);
 
-	ret = kobject_uevent(&dev->kobj, KOBJ_ADD);
-	if (!strncmp(dev_name(dev), "remoteproc", strlen("remoteproc")))
-		pr_err("[%s] dev : %s add ret : %d\n", __func__, dev_name(dev), ret);
+	kobject_uevent(&dev->kobj, KOBJ_ADD);
 
 	/*
 	 * Check if any of the other devices (consumers) have been waiting for
@@ -3680,6 +3673,26 @@ struct device *device_find_child_by_name(struct device *parent,
 	return child;
 }
 EXPORT_SYMBOL_GPL(device_find_child_by_name);
+
+static int match_any(struct device *dev, void *unused)
+{
+	return 1;
+}
+
+/**
+ * device_find_any_child - device iterator for locating a child device, if any.
+ * @parent: parent struct device
+ *
+ * This is similar to the device_find_child() function above, but it
+ * returns a reference to a child device, if any.
+ *
+ * NOTE: you will need to drop the reference with put_device() after use.
+ */
+struct device *device_find_any_child(struct device *parent)
+{
+	return device_find_child(parent, NULL, match_any);
+}
+EXPORT_SYMBOL_GPL(device_find_any_child);
 
 int __init devices_init(void)
 {

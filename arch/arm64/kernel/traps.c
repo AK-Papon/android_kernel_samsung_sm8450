@@ -406,9 +406,6 @@ void do_undefinstr(struct pt_regs *regs)
 	if (call_undef_hook(regs) == 0)
 		return;
 
-	pr_emerg("[QCT]pc : %016llx\n", regs->pc);
-	dump_kernel_instr(KERN_EMERG, regs); 
-
 	trace_android_rvh_do_undefinstr(regs, user_mode(regs));
 	BUG_ON(!user_mode(regs));
 	force_signal_inject(SIGILL, ILL_ILLOPC, regs->pc, 0);
@@ -827,6 +824,7 @@ asmlinkage void noinstr handle_bad_stack(struct pt_regs *regs)
 	 * We use nmi_panic to limit the potential for recusive overflows, and
 	 * to get a better stack trace.
 	 */
+	trace_android_rvh_handle_bad_stack(regs, esr, far);
 	nmi_panic(NULL, "kernel stack overflow");
 	cpu_park_loop();
 }

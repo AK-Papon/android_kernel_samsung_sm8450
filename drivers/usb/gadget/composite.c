@@ -319,9 +319,6 @@ int usb_add_function(struct usb_configuration *config,
 	DBG(config->cdev, "adding '%s'/%p to config '%s'/%p\n",
 			function->name, function,
 			config->label, config);
-	pr_err("[USB] %s adding '%s'/%p to config '%s'/%p\n",
-			__func__, function->name, function,
-			config->label, config);
 
 	if (!function->set_alt || !function->disable)
 		goto done;
@@ -360,12 +357,9 @@ int usb_add_function(struct usb_configuration *config,
 		config->superspeed_plus = true;
 
 done:
-	if (value) {
+	if (value)
 		DBG(config->cdev, "adding '%s'/%p --> %d\n",
 				function->name, function, value);
-		pr_err("[USB] %s: adding '%s'/%p --> %d\n",
-				__func__, function->name, function, value);
-		}
 	return value;
 }
 EXPORT_SYMBOL_GPL(usb_add_function);
@@ -965,10 +959,11 @@ static int set_config(struct usb_composite_dev *cdev,
 	else
 		power = min(power, 900U);
 done:
-	if (power <= USB_SELF_POWER_VBUS_MAX_DRAW)
-		usb_gadget_set_selfpowered(gadget);
-	else
+	if (power > USB_SELF_POWER_VBUS_MAX_DRAW ||
+	    (c && !(c->bmAttributes & USB_CONFIG_ATT_SELFPOWER)))
 		usb_gadget_clear_selfpowered(gadget);
+	else
+		usb_gadget_set_selfpowered(gadget);
 
 	usb_gadget_vbus_draw(gadget, power);
 	if (result >= 0 && cdev->delayed_status)
@@ -1974,8 +1969,20 @@ unknown:
 			memset(buf, 0, w_length);
 			buf[5] = 0x01;
 			switch (ctrl->bRequestType & USB_RECIP_MASK) {
+			/*
+			 * The Microsoft CompatID OS Descriptor Spec(w_index = 0x4) and
+			 * Extended Prop OS Desc Spec(w_index = 0x5) state that the
+			 * HighByte of wValue is the InterfaceNumber and the LowByte is
+			 * the PageNumber. This high/low byte ordering is incorrectly
+			 * documented in the Spec. USB analyzer output on the below
+			 * request packets show the high/low byte inverted i.e LowByte
+			 * is the InterfaceNumber and the HighByte is the PageNumber.
+			 * Since we dont support >64KB CompatID/ExtendedProp descriptors,
+			 * PageNumber is set to 0. Hence verify that the HighByte is 0
+			 * for below two cases.
+			 */
 			case USB_RECIP_DEVICE:
-				if (w_index != 0x4 || (w_value & 0xff))
+				if (w_index != 0x4 || (w_value >> 8))
 					break;
 				buf[6] = w_index;
 				/* Number of ext compat interfaces */
@@ -1991,9 +1998,9 @@ unknown:
 				}
 				break;
 			case USB_RECIP_INTERFACE:
-				if (w_index != 0x5 || (w_value & 0xff))
+				if (w_index != 0x5 || (w_value >> 8))
 					break;
-				interface = w_value >> 8;
+				interface = w_value & 0xFF;
 				if (interface >= MAX_CONFIG_INTERFACES ||
 				    !os_desc_cfg->interface[interface])
 					break;
@@ -2356,8 +2363,6 @@ static int composite_bind(struct usb_gadget *gadget,
 	struct usb_composite_driver	*composite = to_cdriver(gdriver);
 	int				status = -ENOMEM;
 
-	pr_err("[USB] %s\n", __func__);
-
 	cdev = kzalloc(sizeof *cdev, GFP_KERNEL);
 	if (!cdev)
 		return status;
@@ -2369,27 +2374,21 @@ static int composite_bind(struct usb_gadget *gadget,
 	INIT_LIST_HEAD(&cdev->gstrings);
 
 	status = composite_dev_prepare(composite, cdev);
-	if (status) {
-		pr_err("[USB] %s: composite_dev_prepare failed (status = %d)\n", __func__, status);
+	if (status)
 		goto fail;
-	}
 
 	/* composite gadget needs to assign strings for whole device (like
 	 * serial number), register function drivers, potentially update
 	 * power state and consumption, etc
 	 */
 	status = composite->bind(cdev);
-	if (status < 0) {
-		pr_err("[USB] %s: composite->bind failed (status = %d)\n", __func__, status);
+	if (status < 0)
 		goto fail;
-	}
 
 	if (cdev->use_os_string) {
 		status = composite_os_desc_req_prepare(cdev, gadget->ep0);
-		if (status) {
-			pr_err("[USB] %s: ccomposite_os_desc_req_prepare failed (status = %d)\n", __func__, status);
+		if (status)
 			goto fail;
-		}
 	}
 
 	update_unchanged_dev_desc(&cdev->desc, composite->dev);
@@ -2397,7 +2396,7 @@ static int composite_bind(struct usb_gadget *gadget,
 	/* has userspace failed to provide a serial number? */
 	if (composite->needs_serial && !cdev->desc.iSerialNumber)
 		WARNING(cdev, "userspace failed to provide iSerialNumber\n");
-	pr_err("[USB] %s: %s ready\n", __func__, composite->name);
+
 	INFO(cdev, "%s ready\n", composite->name);
 	return 0;
 
@@ -2428,7 +2427,10 @@ void composite_suspend(struct usb_gadget *gadget)
 
 	cdev->suspended = 1;
 
-	usb_gadget_set_selfpowered(gadget);
+	if (cdev->config &&
+	    cdev->config->bmAttributes & USB_CONFIG_ATT_SELFPOWER)
+		usb_gadget_set_selfpowered(gadget);
+
 	usb_gadget_vbus_draw(gadget, 2);
 }
 
@@ -2457,8 +2459,11 @@ void composite_resume(struct usb_gadget *gadget)
 		else
 			maxpower = min(maxpower, 900U);
 
-		if (maxpower > USB_SELF_POWER_VBUS_MAX_DRAW)
+		if (maxpower > USB_SELF_POWER_VBUS_MAX_DRAW ||
+		    !(cdev->config->bmAttributes & USB_CONFIG_ATT_SELFPOWER))
 			usb_gadget_clear_selfpowered(gadget);
+		else
+			usb_gadget_set_selfpowered(gadget);
 
 		usb_gadget_vbus_draw(gadget, maxpower);
 	} else {
